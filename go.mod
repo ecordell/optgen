@@ -1,4 +1,4 @@
-module optgen
+module github.com/ecordell/optgen
 
 go 1.13
 
