@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"go/ast"
-	"go/importer"
 	"go/parser"
 	"go/token"
 	"go/types"
@@ -15,8 +14,10 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"unicode"
 
 	"github.com/dave/jennifer/jen"
+	"golang.org/x/tools/go/packages"
 )
 
 type WriterProvider func() io.Writer
@@ -26,13 +27,9 @@ type WriterProvider func() io.Writer
 // TODO: optional flattening of recursive generation WithMetadataName()
 // TODO: field prefix
 // TODO: exported / unexported generation
+// TODO: set/with for arrays and maps
 
 func main() {
-	cwd, err := os.Getwd()
-	if err != nil {
-		log.Fatal("couldn't determine current working directory")
-	}
-
 	fs := flag.NewFlagSet("optgen", flag.ContinueOnError)
 	outputPathFlag := fs.String(
 		"output",
@@ -55,14 +52,14 @@ func main() {
 		log.Fatal("must specify a package directory and a struct to provide options for")
 	}
 
-	dir := fs.Arg(0)
+	pkgName := fs.Arg(0)
 	structName := fs.Arg(1)
+	//
+	//if pkgName == "." {
+	//	pkgName = cwd
+	//}
 
-	if dir == "." {
-		dir = cwd
-	}
-
-	dir = path.Clean(dir)
+	//pkgName = path.Clean(pkgName)
 
 	var writer WriterProvider
 	if outputPathFlag != nil {
@@ -81,7 +78,7 @@ func main() {
 		}
 		fset := token.NewFileSet()
 		var f map[string]*ast.Package
-		f, err = parser.ParseDir(fset, path.Dir(*outputPathFlag), nil, 0)
+		f, err := parser.ParseDir(fset, path.Dir(*outputPathFlag), nil, 0)
 		if err != nil {
 			return "", err
 		}
@@ -97,25 +94,27 @@ func main() {
 	}
 
 	err = func() error {
-		fset := token.NewFileSet()
-		var f map[string]*ast.Package
-		f, err = parser.ParseDir(fset, dir, nil, 0)
+		cfg := &packages.Config{
+			Mode: packages.NeedFiles | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports | packages.NeedSyntax,
+		}
+		pkgs, err := packages.Load(cfg, pkgName)
 		if err != nil {
-			return err
+			fmt.Fprintf(os.Stderr, "load: %v\n", err)
+			os.Exit(1)
+		}
+		if packages.PrintErrors(pkgs) > 0 {
+			os.Exit(1)
 		}
 
-		var files []*ast.File
-		for i := range f {
-			for j := range f[i].Files {
-				files = append(files, f[i].Files[j])
-			}
-			for j := range f[i].Files {
-				err = generate(fset, f[i].Files[j], files, dir, packageName, j, structName, *outputPathFlag, writer)
+		for _, pkg := range pkgs {
+			for _, f := range pkg.Syntax {
+				err = generate(pkg.Fset, f, pkg, pkg.TypesInfo.Defs, pkg.ID, packageName, f.Name.Name, structName, *outputPathFlag, writer)
 				if err != nil {
 					return err
 				}
 			}
 		}
+
 		return nil
 	}()
 	if err != nil {
@@ -123,7 +122,49 @@ func main() {
 	}
 }
 
-func generate(set *token.FileSet, current *ast.File, all []*ast.File, dirname string, pkgName string, fileName string, structName string, outpath string, writer WriterProvider) error {
+type v struct {
+	info *types.Info
+	file *ast.File
+}
+
+func (v *v) Visit(node ast.Node) ast.Visitor {
+	switch node := node.(type) {
+	case *ast.StructType:
+		for _,f  := range node.Fields.List {
+			fmt.Println("FIELD", f)
+			fmt.Println("TYPE", f.Type)
+			fmt.Println("POS", f.Pos())
+
+			//path, _ := astutil.PathEnclosingInterval(v.file, f.Pos(), f.End())
+			////v.info.Uses[path[0]]
+			//v.info.TypeOf(path[0])
+			//fmt.Println("PATH", path)
+			//for _, n := range path {
+			//	fmt.Printf("N %#v\n", n)
+			//}
+		}
+		//fmt.Println("NODE", node.Fields)
+		//fmt.Println(v.info.Uses[node])
+	case *ast.CallExpr:
+		// Get some kind of *ast.Ident for the CallExpr that represents the
+		// package. Then we can look it up in v.info. Where exactly it sits in
+		// the ast depends on the form of the function call.
+		//fm
+		switch node := node.Fun.(type) {
+		case *ast.SelectorExpr: // foo.ReadFile
+			pkgID := node.X.(*ast.Ident)
+			fmt.Println(v.info.Uses[pkgID].(*types.PkgName).Imported().Path())
+
+		case *ast.Ident:        // ReadFile
+			pkgID := node
+			fmt.Println(v.info.Uses[pkgID].Pkg().Path())
+		}
+	}
+
+	return v
+}
+
+func generate(set *token.FileSet, current *ast.File, pkg *packages.Package, defs map[*ast.Ident]types.Object, dirname string, pkgName string, fileName string, structName string, outpath string, writer WriterProvider) error {
 	found := make([]*ast.TypeSpec, 0)
 	ast.Inspect(current, func(node ast.Node) bool {
 		var ts *ast.TypeSpec
@@ -137,10 +178,9 @@ func generate(set *token.FileSet, current *ast.File, all []*ast.File, dirname st
 			return true
 		}
 
-		if !strings.Contains(ts.Name.Name, structName) {
+		if ts.Name.Name != structName {
 			return false
 		}
-
 		found = append(found, ts)
 
 		return false
@@ -148,16 +188,6 @@ func generate(set *token.FileSet, current *ast.File, all []*ast.File, dirname st
 
 	if len(found) == 0 {
 		return nil
-	}
-
-
-	defs := make(map[*ast.Ident]types.Object)
-	infos := &types.Info{Defs: defs}
-	config := types.Config{Importer: importer.ForCompiler(set, "source", nil), FakeImportC: true}
-	// TODO: there should be something better than trimprefix for this
-	pkg, err := config.Check(strings.TrimPrefix(dirname, "vendor/"), set, all, infos)
-	if err != nil {
-		return err
 	}
 
 	outdir, err := filepath.Abs(filepath.Dir(outpath))
@@ -188,11 +218,11 @@ func generate(set *token.FileSet, current *ast.File, all []*ast.File, dirname st
 				s.Id(def.Name())
 			}
 			structName := def.Name()
-			if outdir != pkg.Path() {
+			if outdir != st.Field(0).Pkg().Path() {
 				structRef = func(s *jen.Statement) {
-					s.Qual(pkg.Path(), def.Name())
+					s.Qual(st.Field(0).Pkg().Path(), def.Name())
 				}
-				structName = jen.Qual(pkg.Path(), def.Name()).GoString()
+				structName = jen.Qual(st.Field(0).Pkg().Path(), def.Name()).GoString()
 			}
 
 			// generate the Option type
@@ -208,7 +238,6 @@ func generate(set *token.FileSet, current *ast.File, all []*ast.File, dirname st
 				grp.For(jen.Id("_").Op(",").Id("o").Op(":=").Op("range").Id("opts")).Block(
 					jen.Id("o").Params(jen.Id(receiverId)),
 				)
-
 				grp.Return(jen.Id(receiverId))
 			})
 
@@ -235,10 +264,56 @@ func generate(set *token.FileSet, current *ast.File, all []*ast.File, dirname st
 					continue
 				}
 
+				if outdir != st.Field(0).Pkg().Path() {
+					structRef = func(s *jen.Statement) {
+						s.Qual(st.Field(0).Pkg().Path(), def.Name())
+					}
+					structName = jen.Qual(st.Field(0).Pkg().Path(), def.Name()).GoString()
+				}
+
+				// build a type specifier based on the field type
+				typeRef := []jen.Code{}
+				current := f.Type()
+				LOOP:
+				for {
+					switch t := current.(type) {
+					case *types.Array:
+						typeRef = append(typeRef, jen.Index())
+						current = t.Elem()
+					case *types.Slice:
+						typeRef = append(typeRef, jen.Index())
+						current = t.Elem()
+					case *types.Pointer:
+						typeRef = append(typeRef, jen.Op("*"))
+						current = t.Elem()
+					case *types.Named:
+						// TODO: there must be a better way
+						parts := strings.Split(t.String(),".")
+						suffix := parts[len(parts)-1]
+						typeRef = append(typeRef, jen.Qual(strings.Join(parts[:len(parts)-1], "."), suffix))
+						break LOOP
+					case *types.Basic:
+						typeRef = append(typeRef, jen.Id(t.Name()))
+						break LOOP
+					case *types.Struct:
+						typeRef = append(typeRef, jen.Struct())
+						break LOOP
+					}
+				}
+
+				unexport := func(s string) string {
+					if len(s)==0 {
+						return s
+					}
+					r := []rune(s)
+					r[0] = unicode.ToLower(r[0])
+					return string(r)
+				}
+
 				fieldFuncName := fmt.Sprintf("With%s", strings.Title(f.Name()))
 				buf.Comment(fmt.Sprintf("%s returns an option that can set %s on a %s", fieldFuncName, strings.Title(f.Name()), structName))
 				buf.Func().Id(fmt.Sprintf("With%s", strings.Title(f.Name()))).Params(
-					jen.Id(f.Name()).Id(f.Type().String()),
+					jen.Id(unexport(f.Name())).Add(typeRef...),
 				).Id(optTypeName).BlockFunc(func(grp *jen.Group) {
 					grp.Return(
 						jen.Func().Params(jen.Id(receiverId).Op("*").Do(structRef)).BlockFunc(func(grp2 *jen.Group) {
@@ -254,7 +329,7 @@ func generate(set *token.FileSet, current *ast.File, all []*ast.File, dirname st
 	w := writer()
 	if w == nil {
 		optFile := strings.Replace(fileName, ".go", "_opts.go", 1)
-		w, err = os.OpenFile(optFile, os.O_CREATE|os.O_RDWR, 0600)
+		w, err = os.OpenFile(optFile, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0600)
 		if err != nil {
 			return err
 		}
