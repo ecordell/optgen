@@ -5,8 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"go/ast"
-	"go/parser"
-	"go/token"
 	"go/types"
 	"io"
 	"log"
@@ -22,12 +20,11 @@ import (
 
 type WriterProvider func() io.Writer
 
-// TODO: struct tags to know what to generateForFile
-// TODO: recursive generation WithMetadata(WithName())
-// TODO: optional flattening of recursive generation WithMetadataName()
+// TODO: struct tags to know what to generate
+// TODO: recursive generation, i.e. WithMetadata(WithName())
+// TODO: optional flattening of recursive generation, i.e. WithMetadataName()
 // TODO: configurable field prefix
 // TODO: exported / unexported generation
-// TODO: set/with for arrays and maps
 
 func main() {
 	fs := flag.NewFlagSet("optgen", flag.ContinueOnError)
@@ -53,12 +50,6 @@ func main() {
 
 	pkgName := fs.Arg(0)
 	structName := fs.Arg(1)
-	//
-	//if pkgName == "." {
-	//	pkgName = cwd
-	//}
-
-	//pkgName = path.Clean(pkgName)
 
 	var writer WriterProvider
 	if outputPathFlag != nil {
@@ -71,25 +62,22 @@ func main() {
 		}
 	}
 
-	packageName, err := func() (string, error) {
-		if pkgNameFlag != nil && *pkgNameFlag != "" {
-			return *pkgNameFlag, nil
+	packagePath, packageName, err := func() (string, string, error) {
+		cfg := &packages.Config{
+			Mode: packages.NeedTypes | packages.NeedTypesInfo,
 		}
-		fset := token.NewFileSet()
-		var f map[string]*ast.Package
-		f, err := parser.ParseDir(fset, path.Dir(*outputPathFlag), nil, 0)
+		pkgs, err := packages.Load(cfg, path.Dir(*outputPathFlag))
 		if err != nil {
-			return "", err
+			fmt.Fprintf(os.Stderr, "load: %v\n", err)
+			os.Exit(1)
 		}
-		for i := range f {
-			for _, node := range f[i].Files {
-				return node.Name.String(), nil
-			}
+		if packages.PrintErrors(pkgs) > 0 {
+			os.Exit(1)
 		}
-		return "", fmt.Errorf("no package name found")
+		return pkgs[0].Types.Path(), pkgs[0].Types.Name(), nil
 	}()
-	if err != nil {
-		log.Fatalf("couldn't determine package for %s, consider providing explicitly", *outputPathFlag)
+	if pkgNameFlag != nil && *pkgNameFlag != "" {
+		packageName = *pkgNameFlag
 	}
 
 	err = func() error {
@@ -105,18 +93,22 @@ func main() {
 			os.Exit(1)
 		}
 
+		count := 0
 		for _, pkg := range pkgs {
 			for _, f := range pkg.Syntax {
 				structs := findStructDefs(f, pkg.TypesInfo.Defs, map[string]struct{}{structName: {}})
 				if len(structs) == 0 {
 					continue
 				}
-				err = generateForFile(structs, packageName, f.Name.Name, *outputPathFlag, writer)
+				fmt.Printf("Generating options for %s.%s...\n", packageName, structName)
+				err = generateForFile(structs, packagePath, packageName, f.Name.Name, *outputPathFlag, writer)
 				if err != nil {
 					return err
 				}
+				count++
 			}
 		}
+		fmt.Printf("Generated %d options", count)
 
 		return nil
 	}()
@@ -165,7 +157,15 @@ func findStructDefs(file *ast.File, defs map[*ast.Ident]types.Object, names map[
 	return objs
 }
 
-func generateForFile(objs []types.Object, pkgName string, fileName string, outpath string, writer WriterProvider) error {
+type Config struct {
+	ReceiverId string
+	OptTypeName	string
+	TargetTypeName string
+	StructRef []jen.Code
+	StructName string
+}
+
+func generateForFile(objs []types.Object, pkgPath, pkgName, fileName, outpath string, writer WriterProvider) error {
 	outdir, err := filepath.Abs(filepath.Dir(outpath))
 	if err != nil {
 		return err
@@ -180,30 +180,33 @@ func generateForFile(objs []types.Object, pkgName string, fileName string, outpa
 			return errors.New("type is not a struct")
 		}
 
-		receiverId := strings.ToLower(string(def.Name()[0]))
-		optTypeName := fmt.Sprintf("%sOption", def.Name())
-		targetTypeName := strings.Title(def.Name())
 
-		structRef := []jen.Code{jen.Id(def.Name())}
-		structName := def.Name()
+		config := Config{
+			ReceiverId: strings.ToLower(string(def.Name()[0])),
+			OptTypeName: fmt.Sprintf("%sOption", def.Name()),
+			TargetTypeName: strings.Title(def.Name()),
+			StructRef: []jen.Code{jen.Id(def.Name())},
+			StructName: def.Name(),
+		}
 
 		// if output is not to the same package, qualify imports
-		if outdir != st.Field(0).Pkg().Path() {
-			structRef = []jen.Code{jen.Qual(st.Field(0).Pkg().Path(), def.Name())}
-			structName = jen.Qual(st.Field(0).Pkg().Path(), def.Name()).GoString()
+		structPkg := st.Field(0).Pkg().Path()
+		if pkgPath != structPkg {
+			config.StructRef = []jen.Code{jen.Qual(structPkg, def.Name())}
+			config.StructName = jen.Qual(structPkg, def.Name()).GoString()
 		}
 
 		// generateForFile the Option type
-		writeOptionType(buf, optTypeName, receiverId, structRef)
+		writeOptionType(buf, config)
 
 		// generateForFile NewXWithOptions
-		writeNewXWithOptions(buf, targetTypeName, structName, optTypeName, receiverId, structRef)
+		writeNewXWithOptions(buf, config)
 
 		// generateForFile WithOptions
-		writeXWithOptions(buf, targetTypeName, structName, optTypeName, receiverId, structRef)
+		writeXWithOptions(buf, config)
 
 		// generateForFile all With* functions
-		writeAllWithOptFuncs(buf, st, outdir, structName, optTypeName, receiverId, structRef)
+		writeAllWithOptFuncs(buf, st, outdir, config)
 	}
 
 	w := writer()
@@ -218,27 +221,27 @@ func generateForFile(objs []types.Object, pkgName string, fileName string, outpa
 	return buf.Render(w)
 }
 
-func writeOptionType(buf *jen.File, optTypeName, receiverId string, structRef []jen.Code) {
-	buf.Type().Id(optTypeName).Func().Params(jen.Id(receiverId).Op("*").Add(structRef...))
+func writeOptionType(buf *jen.File, c Config) {
+	buf.Type().Id(c.OptTypeName).Func().Params(jen.Id(c.ReceiverId).Op("*").Add(c.StructRef...))
 }
 
-func writeNewXWithOptions(buf *jen.File, targetTypeName, structName, optTypeName, receiverId string, structRef []jen.Code) {
-	newFuncName := fmt.Sprintf("New%sWithOptions", targetTypeName)
-	buf.Comment(fmt.Sprintf("%s creates a new %s with the passed in options set", newFuncName, structName))
+func writeNewXWithOptions(buf *jen.File, c Config) {
+	newFuncName := fmt.Sprintf("New%sWithOptions", c.TargetTypeName)
+	buf.Comment(fmt.Sprintf("%s creates a new %s with the passed in options set", newFuncName, c.StructName))
 	buf.Func().Id(newFuncName).Params(
-		jen.Id("opts").Op("...").Id(optTypeName),
-	).Op("*").Add(structRef...).BlockFunc(func(grp *jen.Group) {
-		grp.Id(receiverId).Op(":=").Op("&").Add(structRef...).Block()
-		applyOptions(receiverId)(grp)
+		jen.Id("opts").Op("...").Id(c.OptTypeName),
+	).Op("*").Add(c.StructRef...).BlockFunc(func(grp *jen.Group) {
+		grp.Id(c.ReceiverId).Op(":=").Op("&").Add(c.StructRef...).Block()
+		applyOptions(c.ReceiverId)(grp)
 	})
 }
 
-func writeXWithOptions(buf *jen.File, targetTypeName, structName, optTypeName, receiverId string, structRef []jen.Code) {
-	withFuncName := fmt.Sprintf("%sWithOptions", targetTypeName)
-	buf.Comment(fmt.Sprintf("%s configures an existing %s with the passed in options set", withFuncName, structName))
+func writeXWithOptions(buf *jen.File, c Config) {
+	withFuncName := fmt.Sprintf("%sWithOptions", c.TargetTypeName)
+	buf.Comment(fmt.Sprintf("%s configures an existing %s with the passed in options set", withFuncName, c.StructName))
 	buf.Func().Id(withFuncName).Params(
-		jen.Id(receiverId).Op("*").Add(structRef...), jen.Id("opts").Op("...").Id(optTypeName),
-	).Op("*").Add(structRef...).BlockFunc(applyOptions(receiverId))
+		jen.Id(c.ReceiverId).Op("*").Add(c.StructRef...), jen.Id("opts").Op("...").Id(c.OptTypeName),
+	).Op("*").Add(c.StructRef...).BlockFunc(applyOptions(c.ReceiverId))
 }
 
 func applyOptions(receiverId string) func(grp *jen.Group) {
@@ -250,7 +253,7 @@ func applyOptions(receiverId string) func(grp *jen.Group) {
 	}
 }
 
-func writeAllWithOptFuncs(buf *jen.File, st *types.Struct, outdir, structName, optTypeName, receiverId string, structRef []jen.Code) {
+func writeAllWithOptFuncs(buf *jen.File, st *types.Struct, outdir string, c Config) {
 	for i := 0; i < st.NumFields(); i++ {
 		f := st.Field(i)
 		if f.Anonymous() {
@@ -264,24 +267,108 @@ func writeAllWithOptFuncs(buf *jen.File, st *types.Struct, outdir, structName, o
 
 		// build a type specifier based on the field type
 		typeRef := typeSpecForType(f.Type())
-		fieldFuncName := fmt.Sprintf("With%s", strings.Title(f.Name()))
-		buf.Comment(fmt.Sprintf("%s returns an option that can set %s on a %s", fieldFuncName, strings.Title(f.Name()), structName))
-		buf.Func().Id(fieldFuncName).Params(
-			jen.Id(unexport(f.Name())).Add(typeRef...),
-		).Id(optTypeName).BlockFunc(func(grp *jen.Group) {
-			grp.Return(
-				jen.Func().Params(jen.Id(receiverId).Op("*").Add(structRef...)).BlockFunc(func(grp2 *jen.Group) {
-					grp2.Id(receiverId).Op(".").Id(f.Name()).Op("=").Id(unexport(f.Name()))
-				}),
-			)
-		})
+
+		switch f.Type().Underlying().(type) {
+		case *types.Array, *types.Slice:
+			writeSliceWithOpt(buf, f, typeRef, c)
+			writeSliceSetOpt(buf, f, typeRef, c)
+		case *types.Map:
+			writeMapWithOpt(buf, f, typeRef, c)
+			writeMapSetOpt(buf, f, typeRef, c)
+		default:
+			writeStandardWithOpt(buf, f, typeRef, c)
+		}
 	}
 }
 
-func typeSpecForType(t types.Type) (ref []jen.Code) {
-	ref = make([]jen.Code,0)
-	current := t
+func writeSliceWithOpt(buf *jen.File, f *types.Var, ref []jen.Code, c Config) {
+	ref = ref[1:] // remove the first element, which should be [] for slice types
+	fieldFuncName := fmt.Sprintf("With%s", strings.Title(f.Name()))
+	buf.Comment(fmt.Sprintf("%s returns an option that can append %ss to %s.%s", fieldFuncName, strings.Title(f.Name()), c.StructName, f.Name()))
+	buf.Func().Id(fieldFuncName).Params(
+		jen.Id(unexport(f.Name())).Add(ref...),
+	).Id(c.OptTypeName).BlockFunc(func(grp *jen.Group) {
+		grp.Return(
+			jen.Func().Params(jen.Id(c.ReceiverId).Op("*").Add(c.StructRef...)).BlockFunc(func(grp2 *jen.Group) {
+				grp2.Id(c.ReceiverId).Op(".").Id(f.Name()).Op("=").Append(jen.Id(c.ReceiverId).Op(".").Id(f.Name()), jen.Id(unexport(f.Name())))
+			}),
+		)
+	})
+}
+
+func writeSliceSetOpt(buf *jen.File, f *types.Var, ref []jen.Code, c Config) {
+	fieldFuncName := fmt.Sprintf("Set%s", strings.Title(f.Name()))
+	buf.Comment(fmt.Sprintf("%s returns an option that can set %s on a %s", fieldFuncName, strings.Title(f.Name()), c.StructName))
+	buf.Func().Id(fieldFuncName).Params(
+		jen.Id(unexport(f.Name())).Add(ref...),
+	).Id(c.OptTypeName).BlockFunc(func(grp *jen.Group) {
+		grp.Return(
+			jen.Func().Params(jen.Id(c.ReceiverId).Op("*").Add(c.StructRef...)).BlockFunc(func(grp2 *jen.Group) {
+				grp2.Id(c.ReceiverId).Op(".").Id(f.Name()).Op("=").Id(unexport(f.Name()))
+			}),
+		)
+	})
+}
+
+func writeMapWithOpt(buf *jen.File, f *types.Var, ref []jen.Code, c Config) {
+	var mapType = f.Type()
 	for {
+		t, ok := mapType.(*types.Map)
+		mapType = t
+		if ok {
+			break
+		}
+	}
+	m := mapType.(*types.Map)
+	fieldFuncName := fmt.Sprintf("With%s", strings.Title(f.Name()))
+	buf.Comment(fmt.Sprintf("%s returns an option that can append %ss to %s.%s", fieldFuncName, strings.Title(f.Name()), c.StructName, f.Name()))
+	buf.Func().Id(fieldFuncName).Params(
+		jen.Id("key").Id(m.Key().String()),
+		jen.Id("value").Id(m.Elem().String()),
+	).Id(c.OptTypeName).BlockFunc(func(grp *jen.Group) {
+		grp.Return(
+			jen.Func().Params(jen.Id(c.ReceiverId).Op("*").Add(c.StructRef...)).BlockFunc(func(grp2 *jen.Group) {
+				grp2.Id(c.ReceiverId).Op(".").Id(f.Name()).Index(jen.Id("key")).Op("=").Id("value")
+			}),
+		)
+	})
+}
+
+func writeMapSetOpt(buf *jen.File, f *types.Var, ref []jen.Code, c Config) {
+	fieldFuncName := fmt.Sprintf("Set%s", strings.Title(f.Name()))
+	buf.Comment(fmt.Sprintf("%s returns an option that can set %s on a %s", fieldFuncName, strings.Title(f.Name()), c.StructName))
+	buf.Func().Id(fieldFuncName).Params(
+		jen.Id(unexport(f.Name())).Add(ref...),
+	).Id(c.OptTypeName).BlockFunc(func(grp *jen.Group) {
+		grp.Return(
+			jen.Func().Params(jen.Id(c.ReceiverId).Op("*").Add(c.StructRef...)).BlockFunc(func(grp2 *jen.Group) {
+				grp2.Id(c.ReceiverId).Op(".").Id(f.Name()).Op("=").Id(unexport(f.Name()))
+			}),
+		)
+	})
+}
+
+func writeStandardWithOpt(buf *jen.File, f *types.Var, ref []jen.Code, c Config) {
+	fieldFuncName := fmt.Sprintf("With%s", strings.Title(f.Name()))
+	buf.Comment(fmt.Sprintf("%s returns an option that can set %s on a %s", fieldFuncName, strings.Title(f.Name()), c.StructName))
+	buf.Func().Id(fieldFuncName).Params(
+		jen.Id(unexport(f.Name())).Add(ref...),
+	).Id(c.OptTypeName).BlockFunc(func(grp *jen.Group) {
+		grp.Return(
+			jen.Func().Params(jen.Id(c.ReceiverId).Op("*").Add(c.StructRef...)).BlockFunc(func(grp2 *jen.Group) {
+				grp2.Id(c.ReceiverId).Op(".").Id(f.Name()).Op("=").Id(unexport(f.Name()))
+			}),
+		)
+	})
+}
+
+func typeSpecForType(in types.Type) (ref []jen.Code) {
+	ref = make([]jen.Code,0)
+	current := in
+
+	depth := 0
+	for {
+		depth ++
 		switch t := current.(type) {
 		case *types.Array:
 			ref = append(ref, jen.Index())
@@ -304,6 +391,13 @@ func typeSpecForType(t types.Type) (ref []jen.Code) {
 		case *types.Struct:
 			ref = append(ref, jen.Struct())
 			return
+		case *types.Map:
+			ref = append(ref, jen.Map(jen.Id(t.Key().String())).Id(t.Elem().String()))
+			return
+		default:
+			if depth > 10 {
+				panic(fmt.Sprintf("optgen doesn't know how to generate for type %s, please file a bug", in.String()))
+			}
 		}
 	}
 	return
