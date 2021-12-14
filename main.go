@@ -163,6 +163,7 @@ type Config struct {
 	TargetTypeName string
 	StructRef      []jen.Code
 	StructName     string
+	PkgPath        string
 }
 
 func generateForFile(objs []types.Object, pkgPath, pkgName, fileName, outpath string, writer WriterProvider) error {
@@ -186,6 +187,7 @@ func generateForFile(objs []types.Object, pkgPath, pkgName, fileName, outpath st
 			TargetTypeName: strings.Title(def.Name()),
 			StructRef:      []jen.Code{jen.Id(def.Name())},
 			StructName:     def.Name(),
+			PkgPath:        pkgPath,
 		}
 
 		// if output is not to the same package, qualify imports
@@ -265,7 +267,7 @@ func writeAllWithOptFuncs(buf *jen.File, st *types.Struct, outdir string, c Conf
 		}
 
 		// build a type specifier based on the field type
-		typeRef := typeSpecForType(f.Type())
+		typeRef := typeSpecForType(f.Type(), c)
 
 		switch f.Type().Underlying().(type) {
 		case *types.Array, *types.Slice:
@@ -361,7 +363,7 @@ func writeStandardWithOpt(buf *jen.File, f *types.Var, ref []jen.Code, c Config)
 	})
 }
 
-func typeSpecForType(in types.Type) (ref []jen.Code) {
+func typeSpecForType(in types.Type, c Config) (ref []jen.Code) {
 	ref = make([]jen.Code, 0)
 	current := in
 
@@ -379,10 +381,11 @@ func typeSpecForType(in types.Type) (ref []jen.Code) {
 			ref = append(ref, jen.Op("*"))
 			current = t.Elem()
 		case *types.Named:
-			// TODO: there must be a better way
-			parts := strings.Split(t.String(), ".")
-			suffix := parts[len(parts)-1]
-			ref = append(ref, jen.Qual(strings.Join(parts[:len(parts)-1], "."), suffix))
+			if t.Obj().Pkg().Path() == c.PkgPath {
+				ref = append(ref, jen.Id(t.Obj().Name()))
+			} else {
+				ref = append(ref, jen.Qual(t.Obj().Pkg().Path(), t.Obj().Name()))
+			}
 			return
 		case *types.Basic:
 			ref = append(ref, jen.Id(t.Name()))
