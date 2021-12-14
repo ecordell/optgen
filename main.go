@@ -49,7 +49,11 @@ func main() {
 	}
 
 	pkgName := fs.Arg(0)
-	structName := fs.Arg(1)
+	structNames := fs.Args()[1:]
+	structFilter := make(map[string]struct{}, len(structNames))
+	for _, structName := range structNames {
+		structFilter[structName] = struct{}{}
+	}
 
 	var writer WriterProvider
 	if outputPathFlag != nil {
@@ -96,11 +100,11 @@ func main() {
 		count := 0
 		for _, pkg := range pkgs {
 			for _, f := range pkg.Syntax {
-				structs := findStructDefs(f, pkg.TypesInfo.Defs, map[string]struct{}{structName: {}})
+				structs := findStructDefs(f, pkg.TypesInfo.Defs, structFilter)
 				if len(structs) == 0 {
 					continue
 				}
-				fmt.Printf("Generating options for %s.%s...\n", packageName, structName)
+				fmt.Printf("Generating options for %s.%s...\n", packageName, strings.Join(structNames, ", "))
 				err = generateForFile(structs, packagePath, packageName, f.Name.Name, *outputPathFlag, writer)
 				if err != nil {
 					return err
