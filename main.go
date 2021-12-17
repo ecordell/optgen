@@ -43,13 +43,17 @@ func main() {
 		log.Fatal(err.Error())
 	}
 
-	if len(fs.Args()) < 2  {
+	if len(fs.Args()) < 2 {
 		// TODO: usage
 		log.Fatal("must specify a package directory and a struct to provide options for")
 	}
 
 	pkgName := fs.Arg(0)
-	structName := fs.Arg(1)
+	structNames := fs.Args()[1:]
+	structFilter := make(map[string]struct{}, len(structNames))
+	for _, structName := range structNames {
+		structFilter[structName] = struct{}{}
+	}
 
 	var writer WriterProvider
 	if outputPathFlag != nil {
@@ -62,7 +66,7 @@ func main() {
 		}
 	}
 
-	packagePath, packageName, err := func() (string, string, error) {
+	packagePath, packageName := func() (string, string) {
 		cfg := &packages.Config{
 			Mode: packages.NeedTypes | packages.NeedTypesInfo,
 		}
@@ -74,13 +78,13 @@ func main() {
 		if packages.PrintErrors(pkgs) > 0 {
 			os.Exit(1)
 		}
-		return pkgs[0].Types.Path(), pkgs[0].Types.Name(), nil
+		return pkgs[0].Types.Path(), pkgs[0].Types.Name()
 	}()
 	if pkgNameFlag != nil && *pkgNameFlag != "" {
 		packageName = *pkgNameFlag
 	}
 
-	err = func() error {
+	err := func() error {
 		cfg := &packages.Config{
 			Mode: packages.NeedFiles | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports | packages.NeedSyntax,
 		}
@@ -96,11 +100,11 @@ func main() {
 		count := 0
 		for _, pkg := range pkgs {
 			for _, f := range pkg.Syntax {
-				structs := findStructDefs(f, pkg.TypesInfo.Defs, map[string]struct{}{structName: {}})
+				structs := findStructDefs(f, pkg.TypesInfo.Defs, structFilter)
 				if len(structs) == 0 {
 					continue
 				}
-				fmt.Printf("Generating options for %s.%s...\n", packageName, structName)
+				fmt.Printf("Generating options for %s.%s...\n", packageName, strings.Join(structNames, ", "))
 				err = generateForFile(structs, packagePath, packageName, f.Name.Name, *outputPathFlag, writer)
 				if err != nil {
 					return err
@@ -108,7 +112,7 @@ func main() {
 				count++
 			}
 		}
-		fmt.Printf("Generated %d options", count)
+		fmt.Printf("Generated %d options\n", count)
 
 		return nil
 	}()
@@ -143,7 +147,7 @@ func findStructDefs(file *ast.File, defs map[*ast.Ident]types.Object, names map[
 		return nil
 	}
 
-	var objs = make([]types.Object, 0)
+	objs := make([]types.Object, 0)
 	for _, s := range found {
 		switch s.Type.(type) {
 		case *ast.StructType:
@@ -158,11 +162,12 @@ func findStructDefs(file *ast.File, defs map[*ast.Ident]types.Object, names map[
 }
 
 type Config struct {
-	ReceiverId string
-	OptTypeName	string
+	ReceiverId     string
+	OptTypeName    string
 	TargetTypeName string
-	StructRef []jen.Code
-	StructName string
+	StructRef      []jen.Code
+	StructName     string
+	PkgPath        string
 }
 
 func generateForFile(objs []types.Object, pkgPath, pkgName, fileName, outpath string, writer WriterProvider) error {
@@ -180,13 +185,13 @@ func generateForFile(objs []types.Object, pkgPath, pkgName, fileName, outpath st
 			return errors.New("type is not a struct")
 		}
 
-
 		config := Config{
-			ReceiverId: strings.ToLower(string(def.Name()[0])),
-			OptTypeName: fmt.Sprintf("%sOption", def.Name()),
+			ReceiverId:     strings.ToLower(string(def.Name()[0])),
+			OptTypeName:    fmt.Sprintf("%sOption", def.Name()),
 			TargetTypeName: strings.Title(def.Name()),
-			StructRef: []jen.Code{jen.Id(def.Name())},
-			StructName: def.Name(),
+			StructRef:      []jen.Code{jen.Id(def.Name())},
+			StructName:     def.Name(),
+			PkgPath:        pkgPath,
 		}
 
 		// if output is not to the same package, qualify imports
@@ -266,7 +271,7 @@ func writeAllWithOptFuncs(buf *jen.File, st *types.Struct, outdir string, c Conf
 		}
 
 		// build a type specifier based on the field type
-		typeRef := typeSpecForType(f.Type())
+		typeRef := typeSpecForType(f.Type(), c)
 
 		switch f.Type().Underlying().(type) {
 		case *types.Array, *types.Slice:
@@ -311,7 +316,7 @@ func writeSliceSetOpt(buf *jen.File, f *types.Var, ref []jen.Code, c Config) {
 }
 
 func writeMapWithOpt(buf *jen.File, f *types.Var, ref []jen.Code, c Config) {
-	var mapType = f.Type()
+	mapType := f.Type()
 	for {
 		t, ok := mapType.(*types.Map)
 		mapType = t
@@ -362,13 +367,13 @@ func writeStandardWithOpt(buf *jen.File, f *types.Var, ref []jen.Code, c Config)
 	})
 }
 
-func typeSpecForType(in types.Type) (ref []jen.Code) {
-	ref = make([]jen.Code,0)
+func typeSpecForType(in types.Type, c Config) (ref []jen.Code) {
+	ref = make([]jen.Code, 0)
 	current := in
 
 	depth := 0
 	for {
-		depth ++
+		depth++
 		switch t := current.(type) {
 		case *types.Array:
 			ref = append(ref, jen.Index())
@@ -380,10 +385,11 @@ func typeSpecForType(in types.Type) (ref []jen.Code) {
 			ref = append(ref, jen.Op("*"))
 			current = t.Elem()
 		case *types.Named:
-			// TODO: there must be a better way
-			parts := strings.Split(t.String(), ".")
-			suffix := parts[len(parts)-1]
-			ref = append(ref, jen.Qual(strings.Join(parts[:len(parts)-1], "."), suffix))
+			if t.Obj().Pkg().Path() == c.PkgPath {
+				ref = append(ref, jen.Id(t.Obj().Name()))
+			} else {
+				ref = append(ref, jen.Qual(t.Obj().Pkg().Path(), t.Obj().Name()))
+			}
 			return
 		case *types.Basic:
 			ref = append(ref, jen.Id(t.Name()))
@@ -400,7 +406,6 @@ func typeSpecForType(in types.Type) (ref []jen.Code) {
 			}
 		}
 	}
-	return
 }
 
 func unexport(s string) string {
