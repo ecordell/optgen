@@ -201,16 +201,19 @@ func generateForFile(objs []types.Object, pkgPath, pkgName, fileName, outpath st
 			config.StructName = jen.Qual(structPkg, def.Name()).GoString()
 		}
 
-		// generateForFile the Option type
+		// generate the Option type
 		writeOptionType(buf, config)
 
-		// generateForFile NewXWithOptions
+		// generate NewXWithOptions
 		writeNewXWithOptions(buf, config)
 
-		// generateForFile WithOptions
+		// generate ToOption
+		writeToOption(buf, st, config)
+
+		// generate WithOptions
 		writeXWithOptions(buf, config)
 
-		// generateForFile all With* functions
+		// generate all With* functions
 		writeAllWithOptFuncs(buf, st, outdir, config)
 	}
 
@@ -238,6 +241,23 @@ func writeNewXWithOptions(buf *jen.File, c Config) {
 	).Op("*").Add(c.StructRef...).BlockFunc(func(grp *jen.Group) {
 		grp.Id(c.ReceiverId).Op(":=").Op("&").Add(c.StructRef...).Block()
 		applyOptions(c.ReceiverId)(grp)
+	})
+}
+
+func writeToOption(buf *jen.File, st *types.Struct, c Config) {
+	newFuncName := fmt.Sprintf("ToOption")
+
+	buf.Comment(fmt.Sprintf("%s returns a new %s that sets the values from the passed in %s", newFuncName, c.OptTypeName, c.StructName))
+	buf.Func().Params(jen.Id("c").Op("*").Id(c.StructName)).Id(newFuncName).Params().Id(c.OptTypeName).BlockFunc(func(grp *jen.Group) {
+		grp.Return(jen.Func().Params(jen.Id("to").Op("*").Id(c.StructName)).BlockFunc(func(retGrp *jen.Group) {
+			for i := 0; i < st.NumFields(); i++ {
+				f := st.Field(i)
+				if f.Anonymous() {
+					continue
+				}
+				retGrp.Id("to").Op(".").Id(f.Name()).Op("=").Id(c.ReceiverId).Op(".").Id(f.Name())
+			}
+		}))
 	})
 }
 
