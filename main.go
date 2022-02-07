@@ -248,7 +248,7 @@ func writeToOption(buf *jen.File, st *types.Struct, c Config) {
 	newFuncName := fmt.Sprintf("ToOption")
 
 	buf.Comment(fmt.Sprintf("%s returns a new %s that sets the values from the passed in %s", newFuncName, c.OptTypeName, c.StructName))
-	buf.Func().Params(jen.Id("c").Op("*").Id(c.StructName)).Id(newFuncName).Params().Id(c.OptTypeName).BlockFunc(func(grp *jen.Group) {
+	buf.Func().Params(jen.Id(c.ReceiverId).Op("*").Id(c.StructName)).Id(newFuncName).Params().Id(c.OptTypeName).BlockFunc(func(grp *jen.Group) {
 		grp.Return(jen.Func().Params(jen.Id("to").Op("*").Id(c.StructName)).BlockFunc(func(retGrp *jen.Group) {
 			for i := 0; i < st.NumFields(); i++ {
 				f := st.Field(i)
