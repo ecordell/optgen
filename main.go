@@ -212,6 +212,7 @@ func generateForFile(objs []types.Object, pkgPath, pkgName, fileName, outpath st
 
 		// generate WithOptions
 		writeXWithOptions(buf, config)
+		writeWithOptions(buf, config)
 
 		// generate all With* functions
 		writeAllWithOptFuncs(buf, st, outdir, config)
@@ -267,6 +268,14 @@ func writeXWithOptions(buf *jen.File, c Config) {
 	buf.Func().Id(withFuncName).Params(
 		jen.Id(c.ReceiverId).Op("*").Add(c.StructRef...), jen.Id("opts").Op("...").Id(c.OptTypeName),
 	).Op("*").Add(c.StructRef...).BlockFunc(applyOptions(c.ReceiverId))
+}
+
+func writeWithOptions(buf *jen.File, c Config) {
+	withFuncName := "WithOptions"
+	buf.Comment(fmt.Sprintf("%s configures the receiver %s with the passed in options set", withFuncName, c.StructName))
+	buf.Func().Params(jen.Id(c.ReceiverId).Op("*").Id(c.StructName)).Id(withFuncName).
+		Params(jen.Id("opts").Op("...").Id(c.OptTypeName)).Op("*").Add(c.StructRef...).
+		BlockFunc(applyOptions(c.ReceiverId))
 }
 
 func applyOptions(receiverId string) func(grp *jen.Group) {
