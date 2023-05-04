@@ -14,6 +14,7 @@ import (
 	"strings"
 	"unicode"
 
+	_ "github.com/creasty/defaults"
 	"github.com/dave/jennifer/jen"
 	"golang.org/x/tools/go/packages"
 )
@@ -58,7 +59,7 @@ func main() {
 	var writer WriterProvider
 	if outputPathFlag != nil {
 		writer = func() io.Writer {
-			w, err := os.OpenFile(*outputPathFlag, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0600)
+			w, err := os.OpenFile(*outputPathFlag, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0o600)
 			if err != nil {
 				log.Fatalf("couldn't open %s for writing", *outputPathFlag)
 			}
@@ -207,6 +208,9 @@ func generateForFile(objs []types.Object, pkgPath, pkgName, fileName, outpath st
 		// generate NewXWithOptions
 		writeNewXWithOptions(buf, config)
 
+		// generate NewXWithOptionsAndDefaults
+		writeNewXWithOptionsAndDefaults(buf, config)
+
 		// generate ToOption
 		writeToOption(buf, st, config)
 
@@ -221,7 +225,7 @@ func generateForFile(objs []types.Object, pkgPath, pkgName, fileName, outpath st
 	w := writer()
 	if w == nil {
 		optFile := strings.Replace(fileName, ".go", "_opts.go", 1)
-		w, err = os.OpenFile(optFile, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0600)
+		w, err = os.OpenFile(optFile, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0o600)
 		if err != nil {
 			return err
 		}
@@ -241,6 +245,18 @@ func writeNewXWithOptions(buf *jen.File, c Config) {
 		jen.Id("opts").Op("...").Id(c.OptTypeName),
 	).Op("*").Add(c.StructRef...).BlockFunc(func(grp *jen.Group) {
 		grp.Id(c.ReceiverId).Op(":=").Op("&").Add(c.StructRef...).Block()
+		applyOptions(c.ReceiverId)(grp)
+	})
+}
+
+func writeNewXWithOptionsAndDefaults(buf *jen.File, c Config) {
+	newFuncName := fmt.Sprintf("New%sWithOptionsAndDefaults", c.TargetTypeName)
+	buf.Comment(fmt.Sprintf("%s creates a new %s with the passed in options set starting from the defaults", newFuncName, c.StructName))
+	buf.Func().Id(newFuncName).Params(
+		jen.Id("opts").Op("...").Id(c.OptTypeName),
+	).Op("*").Add(c.StructRef...).BlockFunc(func(grp *jen.Group) {
+		grp.Id(c.ReceiverId).Op(":=").Op("&").Add(c.StructRef...).Block()
+		grp.Qual("github.com/creasty/defaults", "MustSet").Call(jen.Id(c.ReceiverId))
 		applyOptions(c.ReceiverId)(grp)
 	})
 }
