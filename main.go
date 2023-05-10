@@ -16,6 +16,7 @@ import (
 
 	_ "github.com/creasty/defaults"
 	"github.com/dave/jennifer/jen"
+	"github.com/fatih/structtag"
 	"golang.org/x/tools/go/packages"
 )
 
@@ -26,6 +27,8 @@ type WriterProvider func() io.Writer
 // TODO: optional flattening of recursive generation, i.e. WithMetadataName()
 // TODO: configurable field prefix
 // TODO: exported / unexported generation
+
+var DefaultSensitiveNames = "secure"
 
 func main() {
 	fs := flag.NewFlagSet("optgen", flag.ContinueOnError)
@@ -38,6 +41,11 @@ func main() {
 		"package",
 		"",
 		"Name of package to use in output file",
+	)
+	sensitiveFieldNamesFlag := fs.String(
+		"sensitive-field-name-matches",
+		DefaultSensitiveNames,
+		"Substring matches of field names that should be considered sensitive",
 	)
 
 	if err := fs.Parse(os.Args[1:]); err != nil {
@@ -85,6 +93,11 @@ func main() {
 		packageName = *pkgNameFlag
 	}
 
+	sensitiveNameMatches := make([]string, 0)
+	if sensitiveFieldNamesFlag != nil {
+		sensitiveNameMatches = strings.Split(*sensitiveFieldNamesFlag, ",")
+	}
+
 	err := func() error {
 		cfg := &packages.Config{
 			Mode: packages.NeedFiles | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports | packages.NeedSyntax,
@@ -106,7 +119,7 @@ func main() {
 					continue
 				}
 				fmt.Printf("Generating options for %s.%s...\n", packageName, strings.Join(structNames, ", "))
-				err = generateForFile(structs, packagePath, packageName, f.Name.Name, *outputPathFlag, writer)
+				err = generateForFile(structs, packagePath, packageName, f.Name.Name, *outputPathFlag, sensitiveNameMatches, writer)
 				if err != nil {
 					return err
 				}
@@ -171,7 +184,7 @@ type Config struct {
 	PkgPath        string
 }
 
-func generateForFile(objs []types.Object, pkgPath, pkgName, fileName, outpath string, writer WriterProvider) error {
+func generateForFile(objs []types.Object, pkgPath, pkgName, fileName, outpath string, sensitiveNameMatches []string, writer WriterProvider) error {
 	outdir, err := filepath.Abs(filepath.Dir(outpath))
 	if err != nil {
 		return err
@@ -213,6 +226,9 @@ func generateForFile(objs []types.Object, pkgPath, pkgName, fileName, outpath st
 
 		// generate ToOption
 		writeToOption(buf, st, config)
+
+		// generate DebugMap
+		writeDebugMap(buf, st, config, sensitiveNameMatches)
 
 		// generate WithOptions
 		writeXWithOptions(buf, config)
@@ -258,6 +274,73 @@ func writeNewXWithOptionsAndDefaults(buf *jen.File, c Config) {
 		grp.Id(c.ReceiverId).Op(":=").Op("&").Add(c.StructRef...).Block()
 		grp.Qual("github.com/creasty/defaults", "MustSet").Call(jen.Id(c.ReceiverId))
 		applyOptions(c.ReceiverId)(grp)
+	})
+}
+
+const (
+	DebugMapFieldTag = "debugmap"
+)
+
+func writeDebugMap(buf *jen.File, st *types.Struct, c Config, sensitiveNameMatches []string) {
+	newFuncName := fmt.Sprintf("DebugMap")
+
+	buf.Comment(fmt.Sprintf("%s returns a map form of %s for debugging", newFuncName, c.TargetTypeName))
+	buf.Func().Params(jen.Id(c.ReceiverId).Id(c.StructName)).Id(newFuncName).Params().Id("map[string]any").BlockFunc(func(grp *jen.Group) {
+		mapId := "debugMap"
+		grp.Id(mapId).Op(":=").Map(jen.String()).Any().Values()
+
+		for i := 0; i < st.NumFields(); i++ {
+			f := st.Field(i)
+			if f.Anonymous() || !f.Exported() {
+				continue
+			}
+
+			tags, err := structtag.Parse(st.Tag(i))
+			if err != nil {
+				panic(err)
+			}
+
+			tag, err := tags.Get(DebugMapFieldTag)
+			if err != nil {
+				fmt.Printf("missing debugmap tag on field %s in type %s\n", f.Name(), c.TargetTypeName)
+				os.Exit(1)
+			}
+
+			switch tag.Value() {
+			case "visible":
+				for _, sensitiveName := range sensitiveNameMatches {
+					if strings.Contains(strings.ToLower(f.Name()), sensitiveName) {
+						fmt.Printf("field %s in type %s must be marked as 'sensitive'\n", f.Name(), c.TargetTypeName)
+						os.Exit(1)
+					}
+				}
+
+				grp.Id(mapId).Index(jen.Lit(f.Name())).Op("=").Qual("github.com/ecordell/optgen/helpers", "DebugValue").Call(jen.Id(c.ReceiverId).Dot(f.Name()), jen.Lit(false))
+
+			case "visible-format":
+				for _, sensitiveName := range sensitiveNameMatches {
+					if strings.Contains(strings.ToLower(f.Name()), sensitiveName) {
+						fmt.Printf("field %s in type %s must be marked as 'sensitive'\n", f.Name(), c.TargetTypeName)
+						os.Exit(1)
+					}
+				}
+
+				grp.Id(mapId).Index(jen.Lit(f.Name())).Op("=").Qual("github.com/ecordell/optgen/helpers", "DebugValue").Call(jen.Id(c.ReceiverId).Dot(f.Name()), jen.Lit(true))
+
+			case "hidden":
+				// skipped
+				continue
+
+			case "sensitive":
+				grp.Id(mapId).Index(jen.Lit(f.Name())).Op("=").Qual("github.com/ecordell/optgen/helpers", "SensitiveDebugValue").Call(jen.Id(c.ReceiverId).Dot(f.Name()))
+
+			default:
+				fmt.Printf("unknown value '%s' for debugmap tag on field %s in type %s\n", tag.Value(), f.Name(), c.TargetTypeName)
+				os.Exit(1)
+			}
+		}
+
+		grp.Return(jen.Id(mapId))
 	})
 }
 

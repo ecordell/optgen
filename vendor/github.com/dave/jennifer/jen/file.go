@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // NewFile Creates a new file, with the specified package name.
@@ -47,7 +49,7 @@ func NewFilePathName(packagePath, packageName string) *File {
 }
 
 // File represents a single source file. Package imports are managed
-// automaticaly by File.
+// automatically by File.
 type File struct {
 	*Group
 	name        string
@@ -57,6 +59,9 @@ type File struct {
 	comments    []string
 	headers     []string
 	cgoPreamble []string
+	// NoFormat can be set to true to disable formatting of the generated source. This may be useful
+	// when performance is critical, and readable code is not required.
+	NoFormat bool
 	// If you're worried about generated package aliases conflicting with local variable names, you
 	// can set a prefix here. Package foo becomes {prefix}_foo.
 	PackagePrefix string
@@ -239,6 +244,16 @@ func guessAlias(path string) string {
 	// alias should now only contain alphanumerics
 	importsRegex := regexp.MustCompile(`[^a-z0-9]`)
 	alias = importsRegex.ReplaceAllString(alias, "")
+
+	// can't have a first digit, per Go identifier rules, so just skip them
+	for firstRune, runeLen := utf8.DecodeRuneInString(alias); unicode.IsDigit(firstRune); firstRune, runeLen = utf8.DecodeRuneInString(alias) {
+		alias = alias[runeLen:]
+	}
+
+	// If path part was all digits, we may be left with an empty string. In this case use "pkg" as the alias.
+	if alias == "" {
+		alias = "pkg"
+	}
 
 	return alias
 }
