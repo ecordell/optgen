@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"unicode"
 
@@ -386,6 +387,24 @@ func applyOptions(receiverId string) func(grp *jen.Group) {
 	}
 }
 
+var genericTypeRegex = regexp.MustCompile("[A-Za-z0-9_]+\\.[A-Za-z0-9_]+\\[(.*)\\]")
+
+// genericFromType provides a means to extract the generic type information
+// This returns the type package as first argument, and the unqualified type name as second argument
+// FIXME replace with whatever comes out of https://github.com/golang/go/issues/54393
+func genericFromType(t types.Type) (string, string) {
+	typeName := t.String()
+	match := genericTypeRegex.FindStringSubmatch(typeName)
+	if len(match) == 2 {
+		idx := strings.LastIndex(match[1], ".")
+		name := match[1][idx+1:]
+		packageName := match[1][:idx]
+
+		return packageName, name
+	}
+	return "", ""
+}
+
 func writeAllWithOptFuncs(buf *jen.File, st *types.Struct, outdir string, c Config) {
 	for i := 0; i < st.NumFields(); i++ {
 		f := st.Field(i)
@@ -415,12 +434,17 @@ func writeAllWithOptFuncs(buf *jen.File, st *types.Struct, outdir string, c Conf
 }
 
 func writeSliceWithOpt(buf *jen.File, f *types.Var, ref []jen.Code, c Config) {
+	genericPackage, genericName := genericFromType(f.Type())
+
 	ref = ref[1:] // remove the first element, which should be [] for slice types
 	fieldFuncName := fmt.Sprintf("With%s", strings.Title(f.Name()))
 	buf.Comment(fmt.Sprintf("%s returns an option that can append %ss to %s.%s", fieldFuncName, strings.Title(f.Name()), c.StructName, f.Name()))
-	buf.Func().Id(fieldFuncName).Params(
-		jen.Id(unexport(f.Name())).Add(ref...),
-	).Id(c.OptTypeName).BlockFunc(func(grp *jen.Group) {
+	arg := jen.Id(unexport(f.Name())).Add(ref...)
+	if genericName != "" {
+		arg = arg.Types(jen.Qual(genericPackage, genericName))
+	}
+
+	buf.Func().Id(fieldFuncName).Params(arg).Id(c.OptTypeName).BlockFunc(func(grp *jen.Group) {
 		grp.Return(
 			jen.Func().Params(jen.Id(c.ReceiverId).Op("*").Add(c.StructRef...)).BlockFunc(func(grp2 *jen.Group) {
 				grp2.Id(c.ReceiverId).Op(".").Id(f.Name()).Op("=").Append(jen.Id(c.ReceiverId).Op(".").Id(f.Name()), jen.Id(unexport(f.Name())))
@@ -430,11 +454,16 @@ func writeSliceWithOpt(buf *jen.File, f *types.Var, ref []jen.Code, c Config) {
 }
 
 func writeSliceSetOpt(buf *jen.File, f *types.Var, ref []jen.Code, c Config) {
+	genericPackage, genericName := genericFromType(f.Type())
+
 	fieldFuncName := fmt.Sprintf("Set%s", strings.Title(f.Name()))
 	buf.Comment(fmt.Sprintf("%s returns an option that can set %s on a %s", fieldFuncName, strings.Title(f.Name()), c.StructName))
-	buf.Func().Id(fieldFuncName).Params(
-		jen.Id(unexport(f.Name())).Add(ref...),
-	).Id(c.OptTypeName).BlockFunc(func(grp *jen.Group) {
+
+	param := jen.Id(unexport(f.Name())).Add(ref...)
+	if genericName != "" {
+		param = param.Types(jen.Qual(genericPackage, genericName))
+	}
+	buf.Func().Id(fieldFuncName).Params(param).Id(c.OptTypeName).BlockFunc(func(grp *jen.Group) {
 		grp.Return(
 			jen.Func().Params(jen.Id(c.ReceiverId).Op("*").Add(c.StructRef...)).BlockFunc(func(grp2 *jen.Group) {
 				grp2.Id(c.ReceiverId).Op(".").Id(f.Name()).Op("=").Id(unexport(f.Name()))
