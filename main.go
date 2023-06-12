@@ -286,7 +286,7 @@ func writeDebugMap(buf *jen.File, st *types.Struct, c Config, sensitiveNameMatch
 	newFuncName := fmt.Sprintf("DebugMap")
 
 	buf.Comment(fmt.Sprintf("%s returns a map form of %s for debugging", newFuncName, c.TargetTypeName))
-	buf.Func().Params(jen.Id(c.ReceiverId).Id(c.StructName)).Id(newFuncName).Params().Id("map[string]any").BlockFunc(func(grp *jen.Group) {
+	buf.Func().Params(jen.Id(c.ReceiverId).Op("*").Id(c.StructName)).Id(newFuncName).Params().Id("map[string]any").BlockFunc(func(grp *jen.Group) {
 		mapId := "debugMap"
 		grp.Id(mapId).Op(":=").Map(jen.String()).Any().Values()
 
