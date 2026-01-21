@@ -85,6 +85,11 @@ func main() {
 		DefaultSensitiveNames,
 		"Substring matches of field names that should be considered sensitive",
 	)
+	prefixFlag := fs.Bool(
+		"prefix",
+		false,
+		"Prefix generated function names with struct name (e.g., WithServerPort instead of WithPort)",
+	)
 
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		log.Fatal(err.Error())
@@ -113,16 +118,10 @@ func main() {
 		}
 	}
 
-<<<<<<< ours
-	packagePath, packageName := func() (string, string) {
-		cfg := &packages.Config{
-			Mode: packages.NeedTypes | packages.NeedTypesInfo,
-=======
 	// Determine package name from output directory or flag
 	packageName := func() string {
 		if pkgNameFlag != nil && *pkgNameFlag != "" {
 			return *pkgNameFlag
->>>>>>> theirs
 		}
 		// Parse a Go file in the output directory to get package name
 		outputDir := filepath.Dir(*outputPathFlag)
@@ -143,15 +142,8 @@ func main() {
 	}
 
 	err := func() error {
-<<<<<<< ours
-		cfg := &packages.Config{
-			Mode: packages.NeedFiles | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports | packages.NeedSyntax,
-		}
-		pkgs, err := packages.Load(cfg, pkgName)
-=======
 		fset := token.NewFileSet()
 		pkgs, err := parser.ParseDir(fset, pkgName, nil, parser.ParseComments)
->>>>>>> theirs
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "parse: %v\n", err)
 			os.Exit(1)
@@ -165,7 +157,7 @@ func main() {
 					continue
 				}
 				fmt.Printf("Generating options for %s.%s...\n", packageName, strings.Join(structNames, ", "))
-				err = generateForFileAST(f, structs, packageName, f.Name.Name, *outputPathFlag, sensitiveNameMatches, writer)
+				err = generateForFileAST(f, structs, packageName, f.Name.Name, *outputPathFlag, sensitiveNameMatches, *prefixFlag, writer)
 				if err != nil {
 					return err
 				}
@@ -220,6 +212,15 @@ type Config struct {
 	StructRef      []jen.Code
 	StructName     string
 	PkgPath        string
+	UsePrefix      bool
+}
+
+// prefix returns the struct name if UsePrefix is true, otherwise empty string
+func (c Config) prefix() string {
+	if c.UsePrefix {
+		return c.StructName
+	}
+	return ""
 }
 
 const (
@@ -284,7 +285,7 @@ func parseStructTag(field *ast.Field, tagKey string) (string, error) {
 
 // generateForFileAST generates functional options code for the given struct types.
 // It creates option types, constructor functions, and utility methods for each struct.
-func generateForFileAST(file *ast.File, typeSpecs []*ast.TypeSpec, pkgName, fileName, outpath string, sensitiveNameMatches []string, writer WriterProvider) error {
+func generateForFileAST(file *ast.File, typeSpecs []*ast.TypeSpec, pkgName, fileName, outpath string, sensitiveNameMatches []string, usePrefix bool, writer WriterProvider) error {
 	outdir, err := filepath.Abs(filepath.Dir(outpath))
 	if err != nil {
 		return err
@@ -310,6 +311,7 @@ func generateForFileAST(file *ast.File, typeSpecs []*ast.TypeSpec, pkgName, file
 			StructRef:      []jen.Code{jen.Id(structName)},
 			StructName:     structName,
 			PkgPath:        "", // Not needed for AST-based generation
+			UsePrefix:      usePrefix,
 		}
 
 		// generate the Option type
@@ -544,7 +546,7 @@ func writeAllWithOptFuncsAST(buf *jen.File, st *ast.StructType, outdir string, c
 
 // writeSliceWithOptAST generates a With* method for slice fields using AST (appends)
 func writeSliceWithOptAST(buf *jen.File, fieldName string, fieldTypeAST ast.Expr, c Config, resolver *ImportResolver) {
-	fieldFuncName := fmt.Sprintf("With%s", strings.Title(fieldName))
+	fieldFuncName := fmt.Sprintf("With%s%s", c.prefix(), strings.Title(fieldName))
 	buf.Comment(fmt.Sprintf("%s returns an option that can append %ss to %s.%s", fieldFuncName, strings.Title(fieldName), c.StructName, fieldName))
 
 	// Extract element type from slice/array AST
@@ -568,7 +570,7 @@ func writeSliceWithOptAST(buf *jen.File, fieldName string, fieldTypeAST ast.Expr
 
 // writeSliceSetOptAST generates a Set* method for slice fields using AST (replaces)
 func writeSliceSetOptAST(buf *jen.File, fieldName string, fieldType jen.Code, c Config) {
-	fieldFuncName := fmt.Sprintf("Set%s", strings.Title(fieldName))
+	fieldFuncName := fmt.Sprintf("Set%s%s", c.prefix(), strings.Title(fieldName))
 	buf.Comment(fmt.Sprintf("%s returns an option that can set %s on a %s", fieldFuncName, strings.Title(fieldName), c.StructName))
 
 	buf.Func().Id(fieldFuncName).Params(
@@ -584,7 +586,7 @@ func writeSliceSetOptAST(buf *jen.File, fieldName string, fieldType jen.Code, c 
 
 // writeMapWithOptAST generates a With* method for map fields using AST (adds key-value)
 func writeMapWithOptAST(buf *jen.File, fieldName string, fieldTypeAST ast.Expr, c Config, resolver *ImportResolver) {
-	fieldFuncName := fmt.Sprintf("With%s", strings.Title(fieldName))
+	fieldFuncName := fmt.Sprintf("With%s%s", c.prefix(), strings.Title(fieldName))
 	buf.Comment(fmt.Sprintf("%s returns an option that can append %ss to %s.%s", fieldFuncName, strings.Title(fieldName), c.StructName, fieldName))
 
 	// Extract key and value types from map AST
@@ -611,7 +613,7 @@ func writeMapWithOptAST(buf *jen.File, fieldName string, fieldTypeAST ast.Expr, 
 
 // writeMapSetOptAST generates a Set* method for map fields using AST (replaces)
 func writeMapSetOptAST(buf *jen.File, fieldName string, fieldType jen.Code, c Config) {
-	fieldFuncName := fmt.Sprintf("Set%s", strings.Title(fieldName))
+	fieldFuncName := fmt.Sprintf("Set%s%s", c.prefix(), strings.Title(fieldName))
 	buf.Comment(fmt.Sprintf("%s returns an option that can set %s on a %s", fieldFuncName, strings.Title(fieldName), c.StructName))
 
 	buf.Func().Id(fieldFuncName).Params(
@@ -627,7 +629,7 @@ func writeMapSetOptAST(buf *jen.File, fieldName string, fieldType jen.Code, c Co
 
 // writeStandardWithOptAST generates a With* method for standard fields using AST
 func writeStandardWithOptAST(buf *jen.File, fieldName string, fieldType jen.Code, c Config) {
-	fieldFuncName := fmt.Sprintf("With%s", strings.Title(fieldName))
+	fieldFuncName := fmt.Sprintf("With%s%s", c.prefix(), strings.Title(fieldName))
 	buf.Comment(fmt.Sprintf("%s returns an option that can set %s on a %s", fieldFuncName, strings.Title(fieldName), c.StructName))
 
 	buf.Func().Id(fieldFuncName).Params(

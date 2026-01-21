@@ -93,64 +93,64 @@ func (c *Config) WithOptions(opts ...ConfigOption) *Config {
 	return c
 }
 
-// WithName returns an option that can set Name on a Config
-func WithName(name string) ConfigOption {
+// WithConfigName returns an option that can set Name on a Config
+func WithConfigName(name string) ConfigOption {
 	return func(c *Config) {
 		c.Name = name
 	}
 }
 
-// WithPort returns an option that can set Port on a Config
-func WithPort(port int) ConfigOption {
+// WithConfigPort returns an option that can set Port on a Config
+func WithConfigPort(port int) ConfigOption {
 	return func(c *Config) {
 		c.Port = port
 	}
 }
 
-// WithEnabled returns an option that can set Enabled on a Config
-func WithEnabled(enabled bool) ConfigOption {
+// WithConfigEnabled returns an option that can set Enabled on a Config
+func WithConfigEnabled(enabled bool) ConfigOption {
 	return func(c *Config) {
 		c.Enabled = enabled
 	}
 }
 
-// WithTimeout returns an option that can set Timeout on a Config
-func WithTimeout(timeout *int) ConfigOption {
+// WithConfigTimeout returns an option that can set Timeout on a Config
+func WithConfigTimeout(timeout *int) ConfigOption {
 	return func(c *Config) {
 		c.Timeout = timeout
 	}
 }
 
-// WithTags returns an option that can append Tagss to Config.Tags
-func WithTags(tags string) ConfigOption {
+// WithConfigTags returns an option that can append Tagss to Config.Tags
+func WithConfigTags(tags string) ConfigOption {
 	return func(c *Config) {
 		c.Tags = append(c.Tags, tags)
 	}
 }
 
-// SetTags returns an option that can set Tags on a Config
-func SetTags(tags []string) ConfigOption {
+// SetConfigTags returns an option that can set Tags on a Config
+func SetConfigTags(tags []string) ConfigOption {
 	return func(c *Config) {
 		c.Tags = tags
 	}
 }
 
-// WithMetadata returns an option that can append Metadatas to Config.Metadata
-func WithMetadata(key string, value interface{}) ConfigOption {
+// WithConfigMetadata returns an option that can append Metadatas to Config.Metadata
+func WithConfigMetadata(key string, value interface{}) ConfigOption {
 	return func(c *Config) {
 		c.Metadata[key] = value
 	}
 }
 
-// SetMetadata returns an option that can set Metadata on a Config
-func SetMetadata(metadata map[string]interface{}) ConfigOption {
+// SetConfigMetadata returns an option that can set Metadata on a Config
+func SetConfigMetadata(metadata map[string]interface{}) ConfigOption {
 	return func(c *Config) {
 		c.Metadata = metadata
 	}
 }
 
-// WithDebug returns an option that can set Debug on a Config
-func WithDebug(debug bool) ConfigOption {
+// WithConfigDebug returns an option that can set Debug on a Config
+func WithConfigDebug(debug bool) ConfigOption {
 	return func(c *Config) {
 		c.Debug = debug
 	}
@@ -229,43 +229,43 @@ func (s *Server) WithOptions(opts ...ServerOption) *Server {
 	return s
 }
 
-// WithHost returns an option that can set Host on a Server
-func WithHost(host string) ServerOption {
+// WithServerHost returns an option that can set Host on a Server
+func WithServerHost(host string) ServerOption {
 	return func(s *Server) {
 		s.Host = host
 	}
 }
 
-// WithPort returns an option that can set Port on a Server
-func WithPort(port int) ServerOption {
+// WithServerPort returns an option that can set Port on a Server
+func WithServerPort(port int) ServerOption {
 	return func(s *Server) {
 		s.Port = port
 	}
 }
 
-// WithTLS returns an option that can set TLS on a Server
-func WithTLS(tLS bool) ServerOption {
+// WithServerTLS returns an option that can set TLS on a Server
+func WithServerTLS(tLS bool) ServerOption {
 	return func(s *Server) {
 		s.TLS = tLS
 	}
 }
 
-// WithCert returns an option that can set Cert on a Server
-func WithCert(cert string) ServerOption {
+// WithServerCert returns an option that can set Cert on a Server
+func WithServerCert(cert string) ServerOption {
 	return func(s *Server) {
 		s.Cert = cert
 	}
 }
 
-// WithKey returns an option that can set Key on a Server
-func WithKey(key string) ServerOption {
+// WithServerKey returns an option that can set Key on a Server
+func WithServerKey(key string) ServerOption {
 	return func(s *Server) {
 		s.Key = key
 	}
 }
 
-// WithWorkers returns an option that can set Workers on a Server
-func WithWorkers(workers int) ServerOption {
+// WithServerWorkers returns an option that can set Workers on a Server
+func WithServerWorkers(workers int) ServerOption {
 	return func(s *Server) {
 		s.Workers = workers
 	}

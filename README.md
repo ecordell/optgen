@@ -97,6 +97,7 @@ optgen [flags] <package-path> <struct-name> [<struct-name>...]
 **Flags:**
 - `-output <path>`: Output file path (required)
 - `-package <name>`: Package name for generated file (optional, inferred from output directory)
+- `-prefix`: Prefix generated function names with struct name (e.g., `WithServerPort` instead of `WithPort`)
 - `-sensitive-field-name-matches <substring>`: Comma-separated list of field name substrings to treat as sensitive (default: "secure")
 
 **Examples:**
@@ -108,8 +109,57 @@ optgen -output=config_options.go . Config
 # Generate for multiple structs
 optgen -output=options.go . Config Server Database
 
+# Generate with prefixed function names
+optgen -output=options.go -prefix . Config Server
+
 # Custom sensitive field detection
 optgen -output=opts.go -sensitive-field-name-matches=password,secret,token . Credentials
+```
+
+### Generating for Multiple Structs
+
+When generating options for multiple structs in the same file, you may encounter naming collisions if the structs share field names. Use the `-prefix` flag to avoid this:
+
+```go
+type Config struct {
+    Name string `debugmap:"visible"`
+    Port int    `debugmap:"visible"`
+}
+
+type Server struct {
+    Host string `debugmap:"visible"`
+    Port int    `debugmap:"visible"` // Same field name as Config!
+}
+```
+
+**Without `-prefix` (causes collision):**
+```bash
+optgen -output=options.go . Config Server
+# ERROR: WithPort redeclared
+```
+
+**With `-prefix` (generates unique names):**
+```bash
+optgen -output=options.go -prefix . Config Server
+```
+
+Generated functions:
+- `WithConfigName(string) ConfigOption`
+- `WithConfigPort(int) ConfigOption`
+- `WithServerHost(string) ServerOption`
+- `WithServerPort(int) ServerOption` ✓ No collision!
+
+Usage:
+```go
+config := NewConfigWithOptions(
+    WithConfigName("my-app"),
+    WithConfigPort(8080),
+)
+
+server := NewServerWithOptions(
+    WithServerHost("localhost"),
+    WithServerPort(3000),
+)
 ```
 
 ### Struct Tags

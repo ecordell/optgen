@@ -14,7 +14,7 @@ type Gen mg.Namespace
 // Example regenerates the example config options
 func (Gen) Example() error {
 	fmt.Println("Regenerating example options...")
-	return sh.RunV("go", "run", ".", "-output=example/config_options.go", "example", "Config", "Server")
+	return sh.RunV("go", "run", ".", "-output=example/config_options.go", "-prefix", "example", "Config", "Server")
 }
 
 // Verify regenerates examples and checks if files changed

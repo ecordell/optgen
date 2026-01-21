@@ -6,11 +6,11 @@ import "fmt"
 func ExampleUsage() {
 	// Create a config with functional options
 	config := NewConfigWithOptions(
-		WithName("my-app"),
-		WithPort(3000),
-		WithEnabled(true),
-		WithTags("production"),
-		WithTags("v1.0"),
+		WithConfigName("my-app"),
+		WithConfigPort(3000),
+		WithConfigEnabled(true),
+		WithConfigTags("production"),
+		WithConfigTags("v1.0"),
 	)
 
 	fmt.Printf("Config created: %s on port %d\n", config.Name, config.Port)
@@ -20,15 +20,15 @@ func ExampleUsage() {
 
 	// Update existing config with more options
 	updatedConfig := config.WithOptions(
-		WithName("my-app-updated"),
-		WithDebug(true),
+		WithConfigName("my-app-updated"),
+		WithConfigDebug(true),
 	)
 
 	fmt.Printf("Updated config: %s (debug=%v)\n", updatedConfig.Name, updatedConfig.Debug)
 
 	// Create config with defaults
 	configWithDefaults := NewConfigWithOptionsAndDefaults(
-		WithName("default-app"),
+		WithConfigName("default-app"),
 	)
 
 	fmt.Printf("Config with defaults: %+v\n", configWithDefaults)
