@@ -77,6 +77,12 @@ func (c *Config) DebugMap() map[string]any {
 	return debugMap
 }
 
+// FlatDebugMap returns a flattened map form of Config for debugging
+// Nested maps are flattened using dot notation (e.g., "parent.child.field")
+func (c *Config) FlatDebugMap() map[string]any {
+	return flattenDebugMap(c.DebugMap())
+}
+
 // ConfigWithOptions configures an existing Config with the passed in options set
 func ConfigWithOptions(c *Config, opts ...ConfigOption) *Config {
 	for _, o := range opts {
@@ -213,6 +219,12 @@ func (s *Server) DebugMap() map[string]any {
 	return debugMap
 }
 
+// FlatDebugMap returns a flattened map form of Server for debugging
+// Nested maps are flattened using dot notation (e.g., "parent.child.field")
+func (s *Server) FlatDebugMap() map[string]any {
+	return flattenDebugMap(s.DebugMap())
+}
+
 // ServerWithOptions configures an existing Server with the passed in options set
 func ServerWithOptions(s *Server, opts ...ServerOption) *Server {
 	for _, o := range opts {
@@ -269,4 +281,20 @@ func WithServerWorkers(workers int) ServerOption {
 	return func(s *Server) {
 		s.Workers = workers
 	}
+}
+
+// flattenDebugMap recursively flattens nested maps using dot notation
+func flattenDebugMap(debugMap map[string]any) map[string]any {
+	flattened := make(map[string]any, len(debugMap))
+	for key, value := range debugMap {
+		childMap, ok := value.(map[string]any)
+		if ok {
+			for fk, fv := range flattenDebugMap(childMap) {
+				flattened[key+"."+fk] = fv
+			}
+			continue
+		}
+		flattened[key] = value
+	}
+	return flattened
 }

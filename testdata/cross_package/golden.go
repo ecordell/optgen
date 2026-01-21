@@ -49,6 +49,12 @@ func (c *CrossPackage) DebugMap() map[string]any {
 	return debugMap
 }
 
+// FlatDebugMap returns a flattened map form of CrossPackage for debugging
+// Nested maps are flattened using dot notation (e.g., "parent.child.field")
+func (c *CrossPackage) FlatDebugMap() map[string]any {
+	return flattenDebugMap(c.DebugMap())
+}
+
 // CrossPackageWithOptions configures an existing CrossPackage with the passed in options set
 func CrossPackageWithOptions(c *CrossPackage, opts ...CrossPackageOption) *CrossPackage {
 	for _, o := range opts {
@@ -84,4 +90,20 @@ func WithDuration(duration time.Duration) CrossPackageOption {
 	return func(c *CrossPackage) {
 		c.Duration = duration
 	}
+}
+
+// flattenDebugMap recursively flattens nested maps using dot notation
+func flattenDebugMap(debugMap map[string]any) map[string]any {
+	flattened := make(map[string]any, len(debugMap))
+	for key, value := range debugMap {
+		childMap, ok := value.(map[string]any)
+		if ok {
+			for fk, fv := range flattenDebugMap(childMap) {
+				flattened[key+"."+fk] = fv
+			}
+			continue
+		}
+		flattened[key] = value
+	}
+	return flattened
 }
