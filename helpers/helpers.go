@@ -1,3 +1,7 @@
+// Package helpers provides utility functions for optgen-generated code.
+//
+// The helpers package contains functions used by generated option code,
+// primarily for creating safe debug representations of values.
 package helpers
 
 import (
@@ -9,11 +13,17 @@ type withDebugMap interface {
 	DebugMap() map[string]any
 }
 
-// DebugValue returns the debug value for the given raw Go value. If the value
-// is a primitive, it is directly returned. If the value is itself a generated
-// Config with a DebugMap function, the DebugMap is invoked. Otherwise, "(value)"
-// is returned, unless fmtValue is specified, in which case it is returned as the
-// result of fmt.Sprintf.
+// DebugValue returns a safe debug representation of a value.
+//
+// For primitive types (string, int, bool, etc.), it returns the value directly.
+// For maps and slices, it returns a size indicator unless fmtValue is true.
+// For types implementing the withDebugMap interface, it calls their DebugMap method.
+//
+// Parameters:
+//   - value: The value to convert for debug output
+//   - fmtValue: If true, formats complex values using fmt.Sprintf instead of size indicators
+//
+// Returns a debug-safe representation suitable for logging.
 func DebugValue(value any, fmtValue bool) any {
 	if value == nil {
 		return "nil"
@@ -101,8 +111,15 @@ func DebugValue(value any, fmtValue bool) any {
 	}
 }
 
-// SensitiveDebugValue returns the string "nil" if the value is nil, "(empty)"
-// if empty and otherwise returns "(sensitive)".
+// SensitiveDebugValue returns a safe placeholder for sensitive values.
+//
+// This function should be used for passwords, API keys, tokens, and other
+// sensitive data that should not appear in logs or debug output.
+//
+// Returns:
+//   - "nil" if value is nil
+//   - "(empty)" if value is empty string
+//   - "(sensitive)" otherwise
 func SensitiveDebugValue(value any) any {
 	if value == nil {
 		return "nil"
@@ -115,6 +132,13 @@ func SensitiveDebugValue(value any) any {
 	return "(sensitive)"
 }
 
+// Flatten recursively flattens nested debug maps into a single-level map.
+//
+// Nested keys are joined with dots. For example:
+//
+//	{"server": {"host": "localhost"}} becomes {"server.host": "localhost"}
+//
+// This is useful for structured logging systems that prefer flat key-value pairs.
 func Flatten(debugMap map[string]any) map[string]any {
 	flattened := make(map[string]any, len(debugMap))
 	for key, value := range debugMap {

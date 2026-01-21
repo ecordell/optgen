@@ -1,3 +1,42 @@
+// Package main implements optgen, a code generator for functional options in Go.
+//
+// optgen generates functional option patterns for Go structs, including:
+//   - With* functions for setting field values
+//   - DebugMap methods for safe debug output
+//   - Special handling for slices, maps, and sensitive fields
+//
+// Usage:
+//
+//	optgen [flags] <package-path> <struct-name> [<struct-name>...]
+//
+// Flags:
+//
+//	-output <path>
+//	    Location where generated options will be written (required)
+//	-package <name>
+//	    Name of package to use in output file (optional, inferred from output directory)
+//	-sensitive-field-name-matches <substring>
+//	    Comma-separated list of field name substrings considered sensitive (default: "secure")
+//
+// Example:
+//
+//	//go:generate go run github.com/ecordell/optgen -output=config_options.go . Config
+//
+// Struct Tag Format:
+//
+// Fields must be annotated with the `debugmap` struct tag:
+//   - "visible" - Show actual field value in DebugMap
+//   - "visible-format" - Show formatted value (expands collections)
+//   - "sensitive" - Show "(sensitive)" placeholder
+//   - "hidden" - Omit from DebugMap entirely
+//
+// Example struct:
+//
+//	type Config struct {
+//	    Name     string `debugmap:"visible"`
+//	    Password string `debugmap:"sensitive"`
+//	    Data     []byte `debugmap:"hidden"`
+//	}
 package main
 
 import (
@@ -143,6 +182,8 @@ func main() {
 	}
 }
 
+// findStructDefsAST finds struct type definitions in an AST file that match the given names.
+// It returns a slice of *ast.TypeSpec for each matching struct type.
 func findStructDefsAST(file *ast.File, names map[string]struct{}) []*ast.TypeSpec {
 	found := make([]*ast.TypeSpec, 0)
 	ast.Inspect(file, func(node ast.Node) bool {
@@ -190,7 +231,9 @@ type ImportResolver struct {
 	pkgToPath map[string]string
 }
 
-// NewImportResolver creates an ImportResolver from a file's imports
+// NewImportResolver creates an ImportResolver from a file's imports.
+// The resolver maps package names to their full import paths, handling both
+// standard imports and aliased imports.
 func NewImportResolver(file *ast.File) *ImportResolver {
 	resolver := &ImportResolver{pkgToPath: make(map[string]string)}
 	for _, imp := range file.Imports {
@@ -210,7 +253,8 @@ func NewImportResolver(file *ast.File) *ImportResolver {
 	return resolver
 }
 
-// Resolve returns the full import path for a package name
+// Resolve returns the full import path for a package name.
+// For example, "sql" might resolve to "database/sql".
 func (r *ImportResolver) Resolve(pkgName string) string {
 	if path, ok := r.pkgToPath[pkgName]; ok {
 		return path
@@ -219,7 +263,8 @@ func (r *ImportResolver) Resolve(pkgName string) string {
 	return pkgName
 }
 
-// parseStructTag parses a struct tag and returns the value for the given key
+// parseStructTag parses a struct field tag and returns the value for the given key.
+// Returns an error if the tag is missing or cannot be parsed.
 func parseStructTag(field *ast.Field, tagKey string) (string, error) {
 	if field.Tag == nil {
 		return "", fmt.Errorf("missing tag")
@@ -237,6 +282,8 @@ func parseStructTag(field *ast.Field, tagKey string) (string, error) {
 	return tag.Value(), nil
 }
 
+// generateForFileAST generates functional options code for the given struct types.
+// It creates option types, constructor functions, and utility methods for each struct.
 func generateForFileAST(file *ast.File, typeSpecs []*ast.TypeSpec, pkgName, fileName, outpath string, sensitiveNameMatches []string, writer WriterProvider) error {
 	outdir, err := filepath.Abs(filepath.Dir(outpath))
 	if err != nil {
@@ -579,7 +626,8 @@ func isMapAST(t ast.Expr) bool {
 	return ok
 }
 
-// astTypeToJenCode converts an AST type expression to jen.Code
+// astTypeToJenCode converts an AST type expression to jen.Code for code generation.
+// It handles basic types, pointers, selectors, arrays, maps, interfaces, and channels.
 func astTypeToJenCode(expr ast.Expr, resolver *ImportResolver) jen.Code {
 	switch t := expr.(type) {
 	case *ast.Ident:
