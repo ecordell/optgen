@@ -5,20 +5,18 @@ import (
 	"flag"
 	"fmt"
 	"go/ast"
-	"go/types"
+	"go/parser"
+	"go/token"
 	"io"
 	"log"
 	"os"
-	"path"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"unicode"
 
 	_ "github.com/creasty/defaults"
 	"github.com/dave/jennifer/jen"
 	"github.com/fatih/structtag"
-	"golang.org/x/tools/go/packages"
 )
 
 type WriterProvider func() io.Writer
@@ -76,23 +74,29 @@ func main() {
 		}
 	}
 
+<<<<<<< ours
 	packagePath, packageName := func() (string, string) {
 		cfg := &packages.Config{
 			Mode: packages.NeedTypes | packages.NeedTypesInfo,
+=======
+	// Determine package name from output directory or flag
+	packageName := func() string {
+		if pkgNameFlag != nil && *pkgNameFlag != "" {
+			return *pkgNameFlag
+>>>>>>> theirs
 		}
-		pkgs, err := packages.Load(cfg, path.Dir(*outputPathFlag))
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "load: %v\n", err)
-			os.Exit(1)
+		// Parse a Go file in the output directory to get package name
+		outputDir := filepath.Dir(*outputPathFlag)
+		fset := token.NewFileSet()
+		pkgs, err := parser.ParseDir(fset, outputDir, nil, parser.PackageClauseOnly)
+		if err != nil || len(pkgs) == 0 {
+			return "main" // fallback
 		}
-		if packages.PrintErrors(pkgs) > 0 {
-			os.Exit(1)
+		for name := range pkgs {
+			return name
 		}
-		return pkgs[0].Types.Path(), pkgs[0].Types.Name()
+		return "main"
 	}()
-	if pkgNameFlag != nil && *pkgNameFlag != "" {
-		packageName = *pkgNameFlag
-	}
 
 	sensitiveNameMatches := make([]string, 0)
 	if sensitiveFieldNamesFlag != nil {
@@ -100,35 +104,38 @@ func main() {
 	}
 
 	err := func() error {
+<<<<<<< ours
 		cfg := &packages.Config{
 			Mode: packages.NeedFiles | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports | packages.NeedSyntax,
 		}
 		pkgs, err := packages.Load(cfg, pkgName)
+=======
+		fset := token.NewFileSet()
+		pkgs, err := parser.ParseDir(fset, pkgName, nil, parser.ParseComments)
+>>>>>>> theirs
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "load: %v\n", err)
-			os.Exit(1)
-		}
-		if packages.PrintErrors(pkgs) > 0 {
+			fmt.Fprintf(os.Stderr, "parse: %v\n", err)
 			os.Exit(1)
 		}
 
 		count := 0
 		for _, pkg := range pkgs {
-			for _, f := range pkg.Syntax {
-				structs := findStructDefs(f, pkg.TypesInfo.Defs, structFilter)
+			for _, f := range pkg.Files {
+				structs := findStructDefsAST(f, structFilter)
 				if len(structs) == 0 {
 					continue
 				}
 				fmt.Printf("Generating options for %s.%s...\n", packageName, strings.Join(structNames, ", "))
-				err = generateForFile(structs, packagePath, packageName, f.Name.Name, *outputPathFlag, sensitiveNameMatches, writer)
+				err = generateForFileAST(f, structs, packageName, f.Name.Name, *outputPathFlag, sensitiveNameMatches, writer)
 				if err != nil {
 					return err
 				}
 				count++
 			}
 		}
-		fmt.Printf("Generated %d options\n", count)
-
+		if count == 0 {
+			return errors.New("no structs found")
+		}
 		return nil
 	}()
 	if err != nil {
@@ -136,7 +143,7 @@ func main() {
 	}
 }
 
-func findStructDefs(file *ast.File, defs map[*ast.Ident]types.Object, names map[string]struct{}) []types.Object {
+func findStructDefsAST(file *ast.File, names map[string]struct{}) []*ast.TypeSpec {
 	found := make([]*ast.TypeSpec, 0)
 	ast.Inspect(file, func(node ast.Node) bool {
 		var ts *ast.TypeSpec
@@ -153,27 +160,16 @@ func findStructDefs(file *ast.File, defs map[*ast.Ident]types.Object, names map[
 		if _, ok := names[ts.Name.Name]; !ok {
 			return false
 		}
-		found = append(found, ts)
+
+		// Check if it's a struct type
+		if _, isStruct := ts.Type.(*ast.StructType); isStruct {
+			found = append(found, ts)
+		}
 
 		return false
 	})
 
-	if len(found) == 0 {
-		return nil
-	}
-
-	objs := make([]types.Object, 0)
-	for _, s := range found {
-		switch s.Type.(type) {
-		case *ast.StructType:
-			def, ok := defs[s.Name]
-			if !ok {
-				continue
-			}
-			objs = append(objs, def)
-		}
-	}
-	return objs
+	return found
 }
 
 type Config struct {
@@ -185,58 +181,111 @@ type Config struct {
 	PkgPath        string
 }
 
-func generateForFile(objs []types.Object, pkgPath, pkgName, fileName, outpath string, sensitiveNameMatches []string, writer WriterProvider) error {
+const (
+	DebugMapFieldTag = "debugmap"
+)
+
+// ImportResolver maps package names to their full import paths
+type ImportResolver struct {
+	pkgToPath map[string]string
+}
+
+// NewImportResolver creates an ImportResolver from a file's imports
+func NewImportResolver(file *ast.File) *ImportResolver {
+	resolver := &ImportResolver{pkgToPath: make(map[string]string)}
+	for _, imp := range file.Imports {
+		path := strings.Trim(imp.Path.Value, `"`)
+
+		// Determine package name
+		var pkgName string
+		if imp.Name != nil {
+			pkgName = imp.Name.Name // Aliased import
+		} else {
+			// Extract last component: "database/sql" → "sql"
+			pkgName = filepath.Base(path)
+		}
+
+		resolver.pkgToPath[pkgName] = path
+	}
+	return resolver
+}
+
+// Resolve returns the full import path for a package name
+func (r *ImportResolver) Resolve(pkgName string) string {
+	if path, ok := r.pkgToPath[pkgName]; ok {
+		return path
+	}
+	// Fallback for standard library single-component imports
+	return pkgName
+}
+
+// parseStructTag parses a struct tag and returns the value for the given key
+func parseStructTag(field *ast.Field, tagKey string) (string, error) {
+	if field.Tag == nil {
+		return "", fmt.Errorf("missing tag")
+	}
+	// field.Tag.Value is like `debugmap:"visible"` (includes backticks)
+	tagStr := strings.Trim(field.Tag.Value, "`")
+	tags, err := structtag.Parse(tagStr)
+	if err != nil {
+		return "", err
+	}
+	tag, err := tags.Get(tagKey)
+	if err != nil {
+		return "", err
+	}
+	return tag.Value(), nil
+}
+
+func generateForFileAST(file *ast.File, typeSpecs []*ast.TypeSpec, pkgName, fileName, outpath string, sensitiveNameMatches []string, writer WriterProvider) error {
 	outdir, err := filepath.Abs(filepath.Dir(outpath))
 	if err != nil {
 		return err
 	}
 
+	// Create import resolver for cross-package types
+	resolver := NewImportResolver(file)
+
 	buf := jen.NewFilePathName(outpath, pkgName)
 	buf.PackageComment("Code generated by github.com/ecordell/optgen. DO NOT EDIT.")
 
-	for _, def := range objs {
-		st, ok := def.Type().Underlying().(*types.Struct)
+	for _, ts := range typeSpecs {
+		st, ok := ts.Type.(*ast.StructType)
 		if !ok {
 			return errors.New("type is not a struct")
 		}
 
+		structName := ts.Name.Name
 		config := Config{
-			ReceiverId:     strings.ToLower(string(def.Name()[0])),
-			OptTypeName:    fmt.Sprintf("%sOption", def.Name()),
-			TargetTypeName: strings.Title(def.Name()),
-			StructRef:      []jen.Code{jen.Id(def.Name())},
-			StructName:     def.Name(),
-			PkgPath:        pkgPath,
-		}
-
-		// if output is not to the same package, qualify imports
-		structPkg := st.Field(0).Pkg().Path()
-		if pkgPath != structPkg {
-			config.StructRef = []jen.Code{jen.Qual(structPkg, def.Name())}
-			config.StructName = jen.Qual(structPkg, def.Name()).GoString()
+			ReceiverId:     strings.ToLower(string(structName[0])),
+			OptTypeName:    fmt.Sprintf("%sOption", structName),
+			TargetTypeName: strings.Title(structName),
+			StructRef:      []jen.Code{jen.Id(structName)},
+			StructName:     structName,
+			PkgPath:        "", // Not needed for AST-based generation
 		}
 
 		// generate the Option type
-		writeOptionType(buf, config)
+		writeOptionTypeAST(buf, config)
 
 		// generate NewXWithOptions
-		writeNewXWithOptions(buf, config)
+		writeNewXWithOptionsAST(buf, config)
 
 		// generate NewXWithOptionsAndDefaults
-		writeNewXWithOptionsAndDefaults(buf, config)
+		writeNewXWithOptionsAndDefaultsAST(buf, config)
 
 		// generate ToOption
-		writeToOption(buf, st, config)
+		writeToOptionAST(buf, st, config)
 
 		// generate DebugMap
-		writeDebugMap(buf, st, config, sensitiveNameMatches)
+		writeDebugMapAST(buf, st, config, sensitiveNameMatches)
 
 		// generate WithOptions
-		writeXWithOptions(buf, config)
-		writeWithOptions(buf, config)
+		writeXWithOptionsAST(buf, config)
+		writeWithOptionsAST(buf, config)
 
 		// generate all With* functions
-		writeAllWithOptFuncs(buf, st, outdir, config)
+		writeAllWithOptFuncsAST(buf, st, outdir, config, resolver)
 	}
 
 	w := writer()
@@ -251,11 +300,11 @@ func generateForFile(objs []types.Object, pkgPath, pkgName, fileName, outpath st
 	return buf.Render(w)
 }
 
-func writeOptionType(buf *jen.File, c Config) {
+func writeOptionTypeAST(buf *jen.File, c Config) {
 	buf.Type().Id(c.OptTypeName).Func().Params(jen.Id(c.ReceiverId).Op("*").Add(c.StructRef...))
 }
 
-func writeNewXWithOptions(buf *jen.File, c Config) {
+func writeNewXWithOptionsAST(buf *jen.File, c Config) {
 	newFuncName := fmt.Sprintf("New%sWithOptions", c.TargetTypeName)
 	buf.Comment(fmt.Sprintf("%s creates a new %s with the passed in options set", newFuncName, c.StructName))
 	buf.Func().Id(newFuncName).Params(
@@ -266,7 +315,7 @@ func writeNewXWithOptions(buf *jen.File, c Config) {
 	})
 }
 
-func writeNewXWithOptionsAndDefaults(buf *jen.File, c Config) {
+func writeNewXWithOptionsAndDefaultsAST(buf *jen.File, c Config) {
 	newFuncName := fmt.Sprintf("New%sWithOptionsAndDefaults", c.TargetTypeName)
 	buf.Comment(fmt.Sprintf("%s creates a new %s with the passed in options set starting from the defaults", newFuncName, c.StructName))
 	buf.Func().Id(newFuncName).Params(
@@ -278,11 +327,24 @@ func writeNewXWithOptionsAndDefaults(buf *jen.File, c Config) {
 	})
 }
 
-const (
-	DebugMapFieldTag = "debugmap"
-)
+func writeToOptionAST(buf *jen.File, st *ast.StructType, c Config) {
+	newFuncName := fmt.Sprintf("ToOption")
 
-func writeDebugMap(buf *jen.File, st *types.Struct, c Config, sensitiveNameMatches []string) {
+	buf.Comment(fmt.Sprintf("%s returns a new %s that sets the values from the passed in %s", newFuncName, c.OptTypeName, c.StructName))
+	buf.Func().Params(jen.Id(c.ReceiverId).Op("*").Id(c.StructName)).Id(newFuncName).Params().Id(c.OptTypeName).BlockFunc(func(grp *jen.Group) {
+		grp.Return(jen.Func().Params(jen.Id("to").Op("*").Id(c.StructName)).BlockFunc(func(retGrp *jen.Group) {
+			for _, field := range st.Fields.List {
+				for _, name := range field.Names {
+					if name.IsExported() {
+						retGrp.Id("to").Op(".").Id(name.Name).Op("=").Id(c.ReceiverId).Op(".").Id(name.Name)
+					}
+				}
+			}
+		}))
+	})
+}
+
+func writeDebugMapAST(buf *jen.File, st *ast.StructType, c Config, sensitiveNameMatches []string) {
 	newFuncName := fmt.Sprintf("DebugMap")
 
 	buf.Comment(fmt.Sprintf("%s returns a map form of %s for debugging", newFuncName, c.TargetTypeName))
@@ -290,54 +352,61 @@ func writeDebugMap(buf *jen.File, st *types.Struct, c Config, sensitiveNameMatch
 		mapId := "debugMap"
 		grp.Id(mapId).Op(":=").Map(jen.String()).Any().Values()
 
-		for i := 0; i < st.NumFields(); i++ {
-			f := st.Field(i)
-			if f.Anonymous() || !f.Exported() {
+		for _, field := range st.Fields.List {
+			// Skip anonymous fields
+			if field.Names == nil {
 				continue
 			}
 
-			tags, err := structtag.Parse(st.Tag(i))
-			if err != nil {
-				panic(err)
-			}
-
-			tag, err := tags.Get(DebugMapFieldTag)
-			if err != nil {
-				fmt.Printf("missing debugmap tag on field %s in type %s\n", f.Name(), c.TargetTypeName)
-				os.Exit(1)
-			}
-
-			switch tag.Value() {
-			case "visible":
-				for _, sensitiveName := range sensitiveNameMatches {
-					if strings.Contains(strings.ToLower(f.Name()), sensitiveName) {
-						fmt.Printf("field %s in type %s must be marked as 'sensitive'\n", f.Name(), c.TargetTypeName)
-						os.Exit(1)
-					}
+			for _, name := range field.Names {
+				// Skip unexported fields
+				if !name.IsExported() {
+					continue
 				}
 
-				grp.Id(mapId).Index(jen.Lit(f.Name())).Op("=").Qual("github.com/ecordell/optgen/helpers", "DebugValue").Call(jen.Id(c.ReceiverId).Dot(f.Name()), jen.Lit(false))
+				fieldName := name.Name
 
-			case "visible-format":
-				for _, sensitiveName := range sensitiveNameMatches {
-					if strings.Contains(strings.ToLower(f.Name()), sensitiveName) {
-						fmt.Printf("field %s in type %s must be marked as 'sensitive'\n", f.Name(), c.TargetTypeName)
-						os.Exit(1)
-					}
+				// Parse the debugmap tag
+				tagValue, err := parseStructTag(field, DebugMapFieldTag)
+				if err != nil {
+					fmt.Printf("missing debugmap tag on field %s in type %s\n", fieldName, c.TargetTypeName)
+					os.Exit(1)
 				}
 
-				grp.Id(mapId).Index(jen.Lit(f.Name())).Op("=").Qual("github.com/ecordell/optgen/helpers", "DebugValue").Call(jen.Id(c.ReceiverId).Dot(f.Name()), jen.Lit(true))
+				switch tagValue {
+				case "visible":
+					// Check that sensitive field names are not marked as visible
+					for _, sensitiveName := range sensitiveNameMatches {
+						if strings.Contains(strings.ToLower(fieldName), sensitiveName) {
+							fmt.Printf("field %s in type %s must be marked as 'sensitive'\n", fieldName, c.TargetTypeName)
+							os.Exit(1)
+						}
+					}
 
-			case "hidden":
-				// skipped
-				continue
+					grp.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Qual("github.com/ecordell/optgen/helpers", "DebugValue").Call(jen.Id(c.ReceiverId).Dot(fieldName), jen.Lit(false))
 
-			case "sensitive":
-				grp.Id(mapId).Index(jen.Lit(f.Name())).Op("=").Qual("github.com/ecordell/optgen/helpers", "SensitiveDebugValue").Call(jen.Id(c.ReceiverId).Dot(f.Name()))
+				case "visible-format":
+					// Check that sensitive field names are not marked as visible-format
+					for _, sensitiveName := range sensitiveNameMatches {
+						if strings.Contains(strings.ToLower(fieldName), sensitiveName) {
+							fmt.Printf("field %s in type %s must be marked as 'sensitive'\n", fieldName, c.TargetTypeName)
+							os.Exit(1)
+						}
+					}
 
-			default:
-				fmt.Printf("unknown value '%s' for debugmap tag on field %s in type %s\n", tag.Value(), f.Name(), c.TargetTypeName)
-				os.Exit(1)
+					grp.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Qual("github.com/ecordell/optgen/helpers", "DebugValue").Call(jen.Id(c.ReceiverId).Dot(fieldName), jen.Lit(true))
+
+				case "hidden":
+					// Skip this field entirely
+					continue
+
+				case "sensitive":
+					grp.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Qual("github.com/ecordell/optgen/helpers", "SensitiveDebugValue").Call(jen.Id(c.ReceiverId).Dot(fieldName))
+
+				default:
+					fmt.Printf("unknown value '%s' for debugmap tag on field %s in type %s\n", tagValue, fieldName, c.TargetTypeName)
+					os.Exit(1)
+				}
 			}
 		}
 
@@ -345,24 +414,7 @@ func writeDebugMap(buf *jen.File, st *types.Struct, c Config, sensitiveNameMatch
 	})
 }
 
-func writeToOption(buf *jen.File, st *types.Struct, c Config) {
-	newFuncName := fmt.Sprintf("ToOption")
-
-	buf.Comment(fmt.Sprintf("%s returns a new %s that sets the values from the passed in %s", newFuncName, c.OptTypeName, c.StructName))
-	buf.Func().Params(jen.Id(c.ReceiverId).Op("*").Id(c.StructName)).Id(newFuncName).Params().Id(c.OptTypeName).BlockFunc(func(grp *jen.Group) {
-		grp.Return(jen.Func().Params(jen.Id("to").Op("*").Id(c.StructName)).BlockFunc(func(retGrp *jen.Group) {
-			for i := 0; i < st.NumFields(); i++ {
-				f := st.Field(i)
-				if f.Anonymous() {
-					continue
-				}
-				retGrp.Id("to").Op(".").Id(f.Name()).Op("=").Id(c.ReceiverId).Op(".").Id(f.Name())
-			}
-		}))
-	})
-}
-
-func writeXWithOptions(buf *jen.File, c Config) {
+func writeXWithOptionsAST(buf *jen.File, c Config) {
 	withFuncName := fmt.Sprintf("%sWithOptions", c.TargetTypeName)
 	buf.Comment(fmt.Sprintf("%s configures an existing %s with the passed in options set", withFuncName, c.StructName))
 	buf.Func().Id(withFuncName).Params(
@@ -370,12 +422,200 @@ func writeXWithOptions(buf *jen.File, c Config) {
 	).Op("*").Add(c.StructRef...).BlockFunc(applyOptions(c.ReceiverId))
 }
 
-func writeWithOptions(buf *jen.File, c Config) {
+func writeWithOptionsAST(buf *jen.File, c Config) {
 	withFuncName := "WithOptions"
 	buf.Comment(fmt.Sprintf("%s configures the receiver %s with the passed in options set", withFuncName, c.StructName))
 	buf.Func().Params(jen.Id(c.ReceiverId).Op("*").Id(c.StructName)).Id(withFuncName).
 		Params(jen.Id("opts").Op("...").Id(c.OptTypeName)).Op("*").Add(c.StructRef...).
 		BlockFunc(applyOptions(c.ReceiverId))
+}
+
+func writeAllWithOptFuncsAST(buf *jen.File, st *ast.StructType, outdir string, c Config, resolver *ImportResolver) {
+	for _, field := range st.Fields.List {
+		if field.Names == nil {
+			// Anonymous field, skip
+			continue
+		}
+
+		for _, name := range field.Names {
+			if name.IsExported() {
+				fieldName := name.Name
+
+				// Try to convert AST type to jen.Code for better type safety
+				var fieldType jen.Code
+				if field.Type != nil {
+					fieldType = astTypeToJenCode(field.Type, resolver)
+				} else {
+					fieldType = jen.Interface()
+				}
+
+				// Generate appropriate methods based on field type
+				if field.Type != nil {
+					if isSliceOrArrayAST(field.Type) {
+						writeSliceWithOptAST(buf, fieldName, field.Type, c, resolver)
+						writeSliceSetOptAST(buf, fieldName, fieldType, c)
+					} else if isMapAST(field.Type) {
+						writeMapWithOptAST(buf, fieldName, field.Type, c, resolver)
+						writeMapSetOptAST(buf, fieldName, fieldType, c)
+					} else {
+						writeStandardWithOptAST(buf, fieldName, fieldType, c)
+					}
+				} else {
+					writeStandardWithOptAST(buf, fieldName, fieldType, c)
+				}
+			}
+		}
+	}
+}
+
+// writeSliceWithOptAST generates a With* method for slice fields using AST (appends)
+func writeSliceWithOptAST(buf *jen.File, fieldName string, fieldTypeAST ast.Expr, c Config, resolver *ImportResolver) {
+	fieldFuncName := fmt.Sprintf("With%s", strings.Title(fieldName))
+	buf.Comment(fmt.Sprintf("%s returns an option that can append %ss to %s.%s", fieldFuncName, strings.Title(fieldName), c.StructName, fieldName))
+
+	// Extract element type from slice/array AST
+	var elemType jen.Code
+	if arrayType, ok := fieldTypeAST.(*ast.ArrayType); ok {
+		elemType = astTypeToJenCode(arrayType.Elt, resolver)
+	} else {
+		elemType = jen.Interface()
+	}
+
+	buf.Func().Id(fieldFuncName).Params(
+		jen.Id(unexport(fieldName)).Add(elemType),
+	).Id(c.OptTypeName).BlockFunc(func(grp *jen.Group) {
+		grp.Return(
+			jen.Func().Params(jen.Id(c.ReceiverId).Op("*").Add(c.StructRef...)).BlockFunc(func(grp2 *jen.Group) {
+				grp2.Id(c.ReceiverId).Op(".").Id(fieldName).Op("=").Append(jen.Id(c.ReceiverId).Op(".").Id(fieldName), jen.Id(unexport(fieldName)))
+			}),
+		)
+	})
+}
+
+// writeSliceSetOptAST generates a Set* method for slice fields using AST (replaces)
+func writeSliceSetOptAST(buf *jen.File, fieldName string, fieldType jen.Code, c Config) {
+	fieldFuncName := fmt.Sprintf("Set%s", strings.Title(fieldName))
+	buf.Comment(fmt.Sprintf("%s returns an option that can set %s on a %s", fieldFuncName, strings.Title(fieldName), c.StructName))
+
+	buf.Func().Id(fieldFuncName).Params(
+		jen.Id(unexport(fieldName)).Add(fieldType),
+	).Id(c.OptTypeName).BlockFunc(func(grp *jen.Group) {
+		grp.Return(
+			jen.Func().Params(jen.Id(c.ReceiverId).Op("*").Add(c.StructRef...)).BlockFunc(func(grp2 *jen.Group) {
+				grp2.Id(c.ReceiverId).Op(".").Id(fieldName).Op("=").Id(unexport(fieldName))
+			}),
+		)
+	})
+}
+
+// writeMapWithOptAST generates a With* method for map fields using AST (adds key-value)
+func writeMapWithOptAST(buf *jen.File, fieldName string, fieldTypeAST ast.Expr, c Config, resolver *ImportResolver) {
+	fieldFuncName := fmt.Sprintf("With%s", strings.Title(fieldName))
+	buf.Comment(fmt.Sprintf("%s returns an option that can append %ss to %s.%s", fieldFuncName, strings.Title(fieldName), c.StructName, fieldName))
+
+	// Extract key and value types from map AST
+	var keyType, valueType jen.Code
+	if mapType, ok := fieldTypeAST.(*ast.MapType); ok {
+		keyType = astTypeToJenCode(mapType.Key, resolver)
+		valueType = astTypeToJenCode(mapType.Value, resolver)
+	} else {
+		keyType = jen.Interface()
+		valueType = jen.Interface()
+	}
+
+	buf.Func().Id(fieldFuncName).Params(
+		jen.Id("key").Add(keyType),
+		jen.Id("value").Add(valueType),
+	).Id(c.OptTypeName).BlockFunc(func(grp *jen.Group) {
+		grp.Return(
+			jen.Func().Params(jen.Id(c.ReceiverId).Op("*").Add(c.StructRef...)).BlockFunc(func(grp2 *jen.Group) {
+				grp2.Id(c.ReceiverId).Op(".").Id(fieldName).Index(jen.Id("key")).Op("=").Id("value")
+			}),
+		)
+	})
+}
+
+// writeMapSetOptAST generates a Set* method for map fields using AST (replaces)
+func writeMapSetOptAST(buf *jen.File, fieldName string, fieldType jen.Code, c Config) {
+	fieldFuncName := fmt.Sprintf("Set%s", strings.Title(fieldName))
+	buf.Comment(fmt.Sprintf("%s returns an option that can set %s on a %s", fieldFuncName, strings.Title(fieldName), c.StructName))
+
+	buf.Func().Id(fieldFuncName).Params(
+		jen.Id(unexport(fieldName)).Add(fieldType),
+	).Id(c.OptTypeName).BlockFunc(func(grp *jen.Group) {
+		grp.Return(
+			jen.Func().Params(jen.Id(c.ReceiverId).Op("*").Add(c.StructRef...)).BlockFunc(func(grp2 *jen.Group) {
+				grp2.Id(c.ReceiverId).Op(".").Id(fieldName).Op("=").Id(unexport(fieldName))
+			}),
+		)
+	})
+}
+
+// writeStandardWithOptAST generates a With* method for standard fields using AST
+func writeStandardWithOptAST(buf *jen.File, fieldName string, fieldType jen.Code, c Config) {
+	fieldFuncName := fmt.Sprintf("With%s", strings.Title(fieldName))
+	buf.Comment(fmt.Sprintf("%s returns an option that can set %s on a %s", fieldFuncName, strings.Title(fieldName), c.StructName))
+
+	buf.Func().Id(fieldFuncName).Params(
+		jen.Id(unexport(fieldName)).Add(fieldType),
+	).Id(c.OptTypeName).BlockFunc(func(grp *jen.Group) {
+		grp.Return(
+			jen.Func().Params(jen.Id(c.ReceiverId).Op("*").Add(c.StructRef...)).BlockFunc(func(grp2 *jen.Group) {
+				grp2.Id(c.ReceiverId).Op(".").Id(fieldName).Op("=").Id(unexport(fieldName))
+			}),
+		)
+	})
+}
+
+// isSliceOrArrayAST checks if an AST type is a slice or array
+func isSliceOrArrayAST(t ast.Expr) bool {
+	_, ok := t.(*ast.ArrayType)
+	return ok
+}
+
+// isMapAST checks if an AST type is a map
+func isMapAST(t ast.Expr) bool {
+	_, ok := t.(*ast.MapType)
+	return ok
+}
+
+// astTypeToJenCode converts an AST type expression to jen.Code
+func astTypeToJenCode(expr ast.Expr, resolver *ImportResolver) jen.Code {
+	switch t := expr.(type) {
+	case *ast.Ident:
+		return jen.Id(t.Name)
+	case *ast.StarExpr:
+		return jen.Op("*").Add(astTypeToJenCode(t.X, resolver))
+	case *ast.SelectorExpr:
+		if pkg, ok := t.X.(*ast.Ident); ok {
+			importPath := resolver.Resolve(pkg.Name)
+			return jen.Qual(importPath, t.Sel.Name)
+		}
+		return jen.Interface()
+	case *ast.ArrayType:
+		if t.Len == nil {
+			// slice
+			return jen.Index().Add(astTypeToJenCode(t.Elt, resolver))
+		}
+		// array - for simplicity, treat as slice
+		return jen.Index().Add(astTypeToJenCode(t.Elt, resolver))
+	case *ast.MapType:
+		return jen.Map(astTypeToJenCode(t.Key, resolver)).Add(astTypeToJenCode(t.Value, resolver))
+	case *ast.InterfaceType:
+		return jen.Interface()
+	case *ast.ChanType:
+		switch t.Dir {
+		case ast.SEND:
+			return jen.Op("<-").Chan().Add(astTypeToJenCode(t.Value, resolver))
+		case ast.RECV:
+			return jen.Chan().Op("<-").Add(astTypeToJenCode(t.Value, resolver))
+		default:
+			return jen.Chan().Add(astTypeToJenCode(t.Value, resolver))
+		}
+	default:
+		// Fallback to interface{} for unknown types
+		return jen.Interface()
+	}
 }
 
 func applyOptions(receiverId string) func(grp *jen.Group) {
@@ -384,184 +624,6 @@ func applyOptions(receiverId string) func(grp *jen.Group) {
 			jen.Id("o").Params(jen.Id(receiverId)),
 		)
 		grp.Return(jen.Id(receiverId))
-	}
-}
-
-var genericTypeRegex = regexp.MustCompile("[A-Za-z0-9_]+\\.[A-Za-z0-9_]+\\[(.*)\\]")
-
-// genericFromType provides a means to extract the generic type information
-// This returns the type package as first argument, and the unqualified type name as second argument
-// FIXME replace with whatever comes out of https://github.com/golang/go/issues/54393
-func genericFromType(t types.Type) (string, string) {
-	typeName := t.String()
-	match := genericTypeRegex.FindStringSubmatch(typeName)
-	if len(match) == 2 {
-		idx := strings.LastIndex(match[1], ".")
-		name := match[1][idx+1:]
-		packageName := match[1][:idx]
-
-		return packageName, name
-	}
-	return "", ""
-}
-
-func writeAllWithOptFuncs(buf *jen.File, st *types.Struct, outdir string, c Config) {
-	for i := 0; i < st.NumFields(); i++ {
-		f := st.Field(i)
-		if f.Anonymous() {
-			continue
-		}
-
-		// don't write options for unexported fields unless the target is the same package
-		if !f.Exported() && outdir != f.Pkg().Path() {
-			continue
-		}
-
-		// build a type specifier based on the field type
-		typeRef := typeSpecForType(f.Type(), c)
-
-		switch f.Type().Underlying().(type) {
-		case *types.Array, *types.Slice:
-			writeSliceWithOpt(buf, f, typeRef, c)
-			writeSliceSetOpt(buf, f, typeRef, c)
-		case *types.Map:
-			writeMapWithOpt(buf, f, typeRef, c)
-			writeMapSetOpt(buf, f, typeRef, c)
-		default:
-			writeStandardWithOpt(buf, f, typeRef, c)
-		}
-	}
-}
-
-func writeSliceWithOpt(buf *jen.File, f *types.Var, ref []jen.Code, c Config) {
-	genericPackage, genericName := genericFromType(f.Type())
-
-	ref = ref[1:] // remove the first element, which should be [] for slice types
-	fieldFuncName := fmt.Sprintf("With%s", strings.Title(f.Name()))
-	buf.Comment(fmt.Sprintf("%s returns an option that can append %ss to %s.%s", fieldFuncName, strings.Title(f.Name()), c.StructName, f.Name()))
-	arg := jen.Id(unexport(f.Name())).Add(ref...)
-	if genericName != "" {
-		arg = arg.Types(jen.Qual(genericPackage, genericName))
-	}
-
-	buf.Func().Id(fieldFuncName).Params(arg).Id(c.OptTypeName).BlockFunc(func(grp *jen.Group) {
-		grp.Return(
-			jen.Func().Params(jen.Id(c.ReceiverId).Op("*").Add(c.StructRef...)).BlockFunc(func(grp2 *jen.Group) {
-				grp2.Id(c.ReceiverId).Op(".").Id(f.Name()).Op("=").Append(jen.Id(c.ReceiverId).Op(".").Id(f.Name()), jen.Id(unexport(f.Name())))
-			}),
-		)
-	})
-}
-
-func writeSliceSetOpt(buf *jen.File, f *types.Var, ref []jen.Code, c Config) {
-	genericPackage, genericName := genericFromType(f.Type())
-
-	fieldFuncName := fmt.Sprintf("Set%s", strings.Title(f.Name()))
-	buf.Comment(fmt.Sprintf("%s returns an option that can set %s on a %s", fieldFuncName, strings.Title(f.Name()), c.StructName))
-
-	param := jen.Id(unexport(f.Name())).Add(ref...)
-	if genericName != "" {
-		param = param.Types(jen.Qual(genericPackage, genericName))
-	}
-	buf.Func().Id(fieldFuncName).Params(param).Id(c.OptTypeName).BlockFunc(func(grp *jen.Group) {
-		grp.Return(
-			jen.Func().Params(jen.Id(c.ReceiverId).Op("*").Add(c.StructRef...)).BlockFunc(func(grp2 *jen.Group) {
-				grp2.Id(c.ReceiverId).Op(".").Id(f.Name()).Op("=").Id(unexport(f.Name()))
-			}),
-		)
-	})
-}
-
-func writeMapWithOpt(buf *jen.File, f *types.Var, ref []jen.Code, c Config) {
-	mapType := f.Type()
-	for {
-		t, ok := mapType.(*types.Map)
-		mapType = t
-		if ok {
-			break
-		}
-	}
-	m := mapType.(*types.Map)
-	fieldFuncName := fmt.Sprintf("With%s", strings.Title(f.Name()))
-	buf.Comment(fmt.Sprintf("%s returns an option that can append %ss to %s.%s", fieldFuncName, strings.Title(f.Name()), c.StructName, f.Name()))
-	buf.Func().Id(fieldFuncName).Params(
-		jen.Id("key").Id(m.Key().String()),
-		jen.Id("value").Id(m.Elem().String()),
-	).Id(c.OptTypeName).BlockFunc(func(grp *jen.Group) {
-		grp.Return(
-			jen.Func().Params(jen.Id(c.ReceiverId).Op("*").Add(c.StructRef...)).BlockFunc(func(grp2 *jen.Group) {
-				grp2.Id(c.ReceiverId).Op(".").Id(f.Name()).Index(jen.Id("key")).Op("=").Id("value")
-			}),
-		)
-	})
-}
-
-func writeMapSetOpt(buf *jen.File, f *types.Var, ref []jen.Code, c Config) {
-	fieldFuncName := fmt.Sprintf("Set%s", strings.Title(f.Name()))
-	buf.Comment(fmt.Sprintf("%s returns an option that can set %s on a %s", fieldFuncName, strings.Title(f.Name()), c.StructName))
-	buf.Func().Id(fieldFuncName).Params(
-		jen.Id(unexport(f.Name())).Add(ref...),
-	).Id(c.OptTypeName).BlockFunc(func(grp *jen.Group) {
-		grp.Return(
-			jen.Func().Params(jen.Id(c.ReceiverId).Op("*").Add(c.StructRef...)).BlockFunc(func(grp2 *jen.Group) {
-				grp2.Id(c.ReceiverId).Op(".").Id(f.Name()).Op("=").Id(unexport(f.Name()))
-			}),
-		)
-	})
-}
-
-func writeStandardWithOpt(buf *jen.File, f *types.Var, ref []jen.Code, c Config) {
-	fieldFuncName := fmt.Sprintf("With%s", strings.Title(f.Name()))
-	buf.Comment(fmt.Sprintf("%s returns an option that can set %s on a %s", fieldFuncName, strings.Title(f.Name()), c.StructName))
-	buf.Func().Id(fieldFuncName).Params(
-		jen.Id(unexport(f.Name())).Add(ref...),
-	).Id(c.OptTypeName).BlockFunc(func(grp *jen.Group) {
-		grp.Return(
-			jen.Func().Params(jen.Id(c.ReceiverId).Op("*").Add(c.StructRef...)).BlockFunc(func(grp2 *jen.Group) {
-				grp2.Id(c.ReceiverId).Op(".").Id(f.Name()).Op("=").Id(unexport(f.Name()))
-			}),
-		)
-	})
-}
-
-func typeSpecForType(in types.Type, c Config) (ref []jen.Code) {
-	ref = make([]jen.Code, 0)
-	current := in
-
-	depth := 0
-	for {
-		depth++
-		switch t := current.(type) {
-		case *types.Array:
-			ref = append(ref, jen.Index())
-			current = t.Elem()
-		case *types.Slice:
-			ref = append(ref, jen.Index())
-			current = t.Elem()
-		case *types.Pointer:
-			ref = append(ref, jen.Op("*"))
-			current = t.Elem()
-		case *types.Named:
-			if t.Obj().Pkg().Path() == c.PkgPath {
-				ref = append(ref, jen.Id(t.Obj().Name()))
-			} else {
-				ref = append(ref, jen.Qual(t.Obj().Pkg().Path(), t.Obj().Name()))
-			}
-			return
-		case *types.Basic:
-			ref = append(ref, jen.Id(t.Name()))
-			return
-		case *types.Struct:
-			ref = append(ref, jen.Struct())
-			return
-		case *types.Map:
-			ref = append(ref, jen.Map(jen.Id(t.Key().String())).Id(t.Elem().String()))
-			return
-		default:
-			if depth > 10 {
-				panic(fmt.Sprintf("optgen doesn't know how to generate for type %s, please file a bug", in.String()))
-			}
-		}
 	}
 }
 
