@@ -343,9 +343,6 @@ func generateForFileAST(file *ast.File, typeSpecs []*ast.TypeSpec, pkgName, file
 		writeAllWithOptFuncsAST(buf, st, outdir, config, resolver)
 	}
 
-	// Write the flattenDebugMap helper function once per file
-	writeFlattenDebugMapHelper(buf)
-
 	w := writer()
 	if w == nil {
 		optFile := strings.Replace(fileName, ".go", "_opts.go", 1)
@@ -433,33 +430,34 @@ func writeDebugMapAST(buf *jen.File, st *ast.StructType, c Config, sensitiveName
 	writeFlatDebugMapAST(buf, c)
 }
 
-// writeFlatDebugMapAST generates a FlatDebugMap method that flattens nested maps
+// writeFlatDebugMapAST generates a FlatDebugMap method that flattens nested maps inline
 func writeFlatDebugMapAST(buf *jen.File, c Config) {
 	buf.Comment(fmt.Sprintf("FlatDebugMap returns a flattened map form of %s for debugging", c.TargetTypeName))
 	buf.Comment("Nested maps are flattened using dot notation (e.g., \"parent.child.field\")")
-	buf.Func().Params(jen.Id(c.ReceiverId).Op("*").Id(c.StructName)).Id("FlatDebugMap").Params().Id("map[string]any").Block(
-		jen.Return(jen.Id("flattenDebugMap").Call(jen.Id(c.ReceiverId).Dot("DebugMap").Call())),
-	)
-}
+	buf.Func().Params(jen.Id(c.ReceiverId).Op("*").Id(c.StructName)).Id("FlatDebugMap").Params().Id("map[string]any").BlockFunc(func(grp *jen.Group) {
+		// Define a recursive anonymous function to flatten maps
+		grp.Var().Id("flatten").Func().Params(
+			jen.Id("m").Map(jen.String()).Any(),
+		).Map(jen.String()).Any()
 
-// writeFlattenDebugMapHelper generates the helper function for flattening maps
-func writeFlattenDebugMapHelper(buf *jen.File) {
-	buf.Comment("flattenDebugMap recursively flattens nested maps using dot notation")
-	buf.Func().Id("flattenDebugMap").Params(
-		jen.Id("debugMap").Map(jen.String()).Any(),
-	).Map(jen.String()).Any().BlockFunc(func(grp *jen.Group) {
-		grp.Id("flattened").Op(":=").Make(jen.Map(jen.String()).Any(), jen.Len(jen.Id("debugMap")))
-		grp.For(jen.List(jen.Id("key"), jen.Id("value")).Op(":=").Range().Id("debugMap")).BlockFunc(func(forGrp *jen.Group) {
-			forGrp.List(jen.Id("childMap"), jen.Id("ok")).Op(":=").Id("value").Assert(jen.Map(jen.String()).Any())
-			forGrp.If(jen.Id("ok")).BlockFunc(func(ifGrp *jen.Group) {
-				ifGrp.For(jen.List(jen.Id("fk"), jen.Id("fv")).Op(":=").Range().Id("flattenDebugMap").Call(jen.Id("childMap"))).Block(
-					jen.Id("flattened").Index(jen.Id("key").Op("+").Lit(".").Op("+").Id("fk")).Op("=").Id("fv"),
-				)
-				ifGrp.Continue()
+		grp.Id("flatten").Op("=").Func().Params(
+			jen.Id("m").Map(jen.String()).Any(),
+		).Map(jen.String()).Any().BlockFunc(func(fnGrp *jen.Group) {
+			fnGrp.Id("result").Op(":=").Make(jen.Map(jen.String()).Any(), jen.Len(jen.Id("m")))
+			fnGrp.For(jen.List(jen.Id("key"), jen.Id("value")).Op(":=").Range().Id("m")).BlockFunc(func(forGrp *jen.Group) {
+				forGrp.List(jen.Id("childMap"), jen.Id("ok")).Op(":=").Id("value").Assert(jen.Map(jen.String()).Any())
+				forGrp.If(jen.Id("ok")).BlockFunc(func(ifGrp *jen.Group) {
+					ifGrp.For(jen.List(jen.Id("childKey"), jen.Id("childValue")).Op(":=").Range().Id("flatten").Call(jen.Id("childMap"))).Block(
+						jen.Id("result").Index(jen.Id("key").Op("+").Lit(".").Op("+").Id("childKey")).Op("=").Id("childValue"),
+					)
+					ifGrp.Continue()
+				})
+				forGrp.Id("result").Index(jen.Id("key")).Op("=").Id("value")
 			})
-			forGrp.Id("flattened").Index(jen.Id("key")).Op("=").Id("value")
+			fnGrp.Return(jen.Id("result"))
 		})
-		grp.Return(jen.Id("flattened"))
+
+		grp.Return(jen.Id("flatten").Call(jen.Id(c.ReceiverId).Dot("DebugMap").Call()))
 	})
 }
 

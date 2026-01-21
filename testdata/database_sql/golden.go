@@ -48,7 +48,22 @@ func (d *DatabaseConfig) DebugMap() map[string]any {
 // FlatDebugMap returns a flattened map form of DatabaseConfig for debugging
 // Nested maps are flattened using dot notation (e.g., "parent.child.field")
 func (d *DatabaseConfig) FlatDebugMap() map[string]any {
-	return flattenDebugMap(d.DebugMap())
+	var flatten func(m map[string]any) map[string]any
+	flatten = func(m map[string]any) map[string]any {
+		result := make(map[string]any, len(m))
+		for key, value := range m {
+			childMap, ok := value.(map[string]any)
+			if ok {
+				for childKey, childValue := range flatten(childMap) {
+					result[key+"."+childKey] = childValue
+				}
+				continue
+			}
+			result[key] = value
+		}
+		return result
+	}
+	return flatten(d.DebugMap())
 }
 
 // DatabaseConfigWithOptions configures an existing DatabaseConfig with the passed in options set
@@ -86,20 +101,4 @@ func WithEnabled(enabled bool) DatabaseConfigOption {
 	return func(d *DatabaseConfig) {
 		d.Enabled = enabled
 	}
-}
-
-// flattenDebugMap recursively flattens nested maps using dot notation
-func flattenDebugMap(debugMap map[string]any) map[string]any {
-	flattened := make(map[string]any, len(debugMap))
-	for key, value := range debugMap {
-		childMap, ok := value.(map[string]any)
-		if ok {
-			for fk, fv := range flattenDebugMap(childMap) {
-				flattened[key+"."+fk] = fv
-			}
-			continue
-		}
-		flattened[key] = value
-	}
-	return flattened
 }

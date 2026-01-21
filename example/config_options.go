@@ -80,7 +80,22 @@ func (c *Config) DebugMap() map[string]any {
 // FlatDebugMap returns a flattened map form of Config for debugging
 // Nested maps are flattened using dot notation (e.g., "parent.child.field")
 func (c *Config) FlatDebugMap() map[string]any {
-	return flattenDebugMap(c.DebugMap())
+	var flatten func(m map[string]any) map[string]any
+	flatten = func(m map[string]any) map[string]any {
+		result := make(map[string]any, len(m))
+		for key, value := range m {
+			childMap, ok := value.(map[string]any)
+			if ok {
+				for childKey, childValue := range flatten(childMap) {
+					result[key+"."+childKey] = childValue
+				}
+				continue
+			}
+			result[key] = value
+		}
+		return result
+	}
+	return flatten(c.DebugMap())
 }
 
 // ConfigWithOptions configures an existing Config with the passed in options set
@@ -222,7 +237,22 @@ func (s *Server) DebugMap() map[string]any {
 // FlatDebugMap returns a flattened map form of Server for debugging
 // Nested maps are flattened using dot notation (e.g., "parent.child.field")
 func (s *Server) FlatDebugMap() map[string]any {
-	return flattenDebugMap(s.DebugMap())
+	var flatten func(m map[string]any) map[string]any
+	flatten = func(m map[string]any) map[string]any {
+		result := make(map[string]any, len(m))
+		for key, value := range m {
+			childMap, ok := value.(map[string]any)
+			if ok {
+				for childKey, childValue := range flatten(childMap) {
+					result[key+"."+childKey] = childValue
+				}
+				continue
+			}
+			result[key] = value
+		}
+		return result
+	}
+	return flatten(s.DebugMap())
 }
 
 // ServerWithOptions configures an existing Server with the passed in options set
@@ -281,20 +311,4 @@ func WithServerWorkers(workers int) ServerOption {
 	return func(s *Server) {
 		s.Workers = workers
 	}
-}
-
-// flattenDebugMap recursively flattens nested maps using dot notation
-func flattenDebugMap(debugMap map[string]any) map[string]any {
-	flattened := make(map[string]any, len(debugMap))
-	for key, value := range debugMap {
-		childMap, ok := value.(map[string]any)
-		if ok {
-			for fk, fv := range flattenDebugMap(childMap) {
-				flattened[key+"."+fk] = fv
-			}
-			continue
-		}
-		flattened[key] = value
-	}
-	return flattened
 }
