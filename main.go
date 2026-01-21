@@ -225,6 +225,12 @@ func (c Config) prefix() string {
 
 const (
 	DebugMapFieldTag = "debugmap"
+
+	// Type categories for debug code generation
+	typeCategoryPrimitive = "primitive"
+	typeCategoryPointer   = "pointer"
+	typeCategorySlice     = "slice"
+	typeCategoryMap       = "map"
 )
 
 // ImportResolver maps package names to their full import paths
@@ -307,7 +313,7 @@ func generateForFileAST(file *ast.File, typeSpecs []*ast.TypeSpec, pkgName, file
 		config := Config{
 			ReceiverId:     strings.ToLower(string(structName[0])),
 			OptTypeName:    fmt.Sprintf("%sOption", structName),
-			TargetTypeName: strings.Title(structName),
+			TargetTypeName: toTitle(structName),
 			StructRef:      []jen.Code{jen.Id(structName)},
 			StructName:     structName,
 			PkgPath:        "", // Not needed for AST-based generation
@@ -377,7 +383,7 @@ func writeNewXWithOptionsAndDefaultsAST(buf *jen.File, c Config) {
 }
 
 func writeToOptionAST(buf *jen.File, st *ast.StructType, c Config) {
-	newFuncName := fmt.Sprintf("ToOption")
+	newFuncName := "ToOption"
 
 	buf.Comment(fmt.Sprintf("%s returns a new %s that sets the values from the passed in %s", newFuncName, c.OptTypeName, c.StructName))
 	buf.Func().Params(jen.Id(c.ReceiverId).Op("*").Id(c.StructName)).Id(newFuncName).Params().Id(c.OptTypeName).BlockFunc(func(grp *jen.Group) {
@@ -394,7 +400,7 @@ func writeToOptionAST(buf *jen.File, st *ast.StructType, c Config) {
 }
 
 func writeDebugMapAST(buf *jen.File, st *ast.StructType, c Config, sensitiveNameMatches []string) {
-	newFuncName := fmt.Sprintf("DebugMap")
+	newFuncName := "DebugMap"
 
 	buf.Comment(fmt.Sprintf("%s returns a map form of %s for debugging", newFuncName, c.TargetTypeName))
 	buf.Func().Params(jen.Id(c.ReceiverId).Op("*").Id(c.StructName)).Id(newFuncName).Params().Id("map[string]any").BlockFunc(func(grp *jen.Group) {
@@ -413,81 +419,80 @@ func writeDebugMapAST(buf *jen.File, st *ast.StructType, c Config, sensitiveName
 					continue
 				}
 
-				fieldName := name.Name
-
-				// Parse the debugmap tag
-				tagValue, err := parseStructTag(field, DebugMapFieldTag)
-				if err != nil {
-					fmt.Printf("missing debugmap tag on field %s in type %s\n", fieldName, c.TargetTypeName)
-					os.Exit(1)
-				}
-
-				switch tagValue {
-				case "visible":
-					// Check that sensitive field names are not marked as visible
-					for _, sensitiveName := range sensitiveNameMatches {
-						if strings.Contains(strings.ToLower(fieldName), sensitiveName) {
-							fmt.Printf("field %s in type %s must be marked as 'sensitive'\n", fieldName, c.TargetTypeName)
-							os.Exit(1)
-						}
-					}
-
-					category := getTypeCategory(field.Type)
-					switch category {
-					case "primitive":
-						generateDebugCodeForPrimitive(grp, c.ReceiverId, fieldName, field.Type, mapId)
-					case "pointer":
-						generateDebugCodeForPointer(grp, c.ReceiverId, fieldName, field.Type, mapId)
-					case "slice":
-						generateDebugCodeForSliceSize(grp, c.ReceiverId, fieldName, mapId)
-					case "map":
-						generateDebugCodeForMapSize(grp, c.ReceiverId, fieldName, mapId)
-					default:
-						// Complex types: direct assignment
-						grp.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Id(c.ReceiverId).Dot(fieldName)
-					}
-
-				case "visible-format":
-					// Check that sensitive field names are not marked as visible-format
-					for _, sensitiveName := range sensitiveNameMatches {
-						if strings.Contains(strings.ToLower(fieldName), sensitiveName) {
-							fmt.Printf("field %s in type %s must be marked as 'sensitive'\n", fieldName, c.TargetTypeName)
-							os.Exit(1)
-						}
-					}
-
-					category := getTypeCategory(field.Type)
-					switch category {
-					case "primitive":
-						generateDebugCodeForPrimitive(grp, c.ReceiverId, fieldName, field.Type, mapId)
-					case "pointer":
-						generateDebugCodeForPointer(grp, c.ReceiverId, fieldName, field.Type, mapId)
-					case "slice":
-						generateDebugCodeForSliceFormat(grp, c.ReceiverId, fieldName, field.Type, mapId)
-					case "map":
-						generateDebugCodeForMapFormat(grp, c.ReceiverId, fieldName, mapId)
-					default:
-						// Complex types: direct assignment
-						grp.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Id(c.ReceiverId).Dot(fieldName)
-					}
-
-				case "hidden":
-					// Skip this field entirely
-					continue
-
-				case "sensitive":
-					category := getTypeCategory(field.Type)
-					generateDebugCodeForSensitive(grp, c.ReceiverId, fieldName, field.Type, category, mapId)
-
-				default:
-					fmt.Printf("unknown value '%s' for debugmap tag on field %s in type %s\n", tagValue, fieldName, c.TargetTypeName)
-					os.Exit(1)
-				}
+				processDebugMapField(grp, field, name.Name, c, sensitiveNameMatches, mapId)
 			}
 		}
 
 		grp.Return(jen.Id(mapId))
 	})
+}
+
+// processDebugMapField processes a single field for debug map generation
+func processDebugMapField(grp *jen.Group, field *ast.Field, fieldName string, c Config, sensitiveNameMatches []string, mapId string) {
+	// Parse the debugmap tag
+	tagValue, err := parseStructTag(field, DebugMapFieldTag)
+	if err != nil {
+		fmt.Printf("missing debugmap tag on field %s in type %s\n", fieldName, c.TargetTypeName)
+		os.Exit(1)
+	}
+
+	switch tagValue {
+	case "visible":
+		validateNotSensitive(fieldName, c.TargetTypeName, sensitiveNameMatches)
+		generateDebugCodeByCategory(grp, field.Type, c.ReceiverId, fieldName, mapId, false)
+
+	case "visible-format":
+		validateNotSensitive(fieldName, c.TargetTypeName, sensitiveNameMatches)
+		generateDebugCodeByCategory(grp, field.Type, c.ReceiverId, fieldName, mapId, true)
+
+	case "hidden":
+		// Skip this field entirely
+		return
+
+	case "sensitive":
+		category := getTypeCategory(field.Type)
+		generateDebugCodeForSensitive(grp, c.ReceiverId, fieldName, field.Type, category, mapId)
+
+	default:
+		fmt.Printf("unknown value '%s' for debugmap tag on field %s in type %s\n", tagValue, fieldName, c.TargetTypeName)
+		os.Exit(1)
+	}
+}
+
+// validateNotSensitive checks that a field name doesn't contain sensitive patterns
+func validateNotSensitive(fieldName, typeName string, sensitiveNameMatches []string) {
+	for _, sensitiveName := range sensitiveNameMatches {
+		if strings.Contains(strings.ToLower(fieldName), sensitiveName) {
+			fmt.Printf("field %s in type %s must be marked as 'sensitive'\n", fieldName, typeName)
+			os.Exit(1)
+		}
+	}
+}
+
+// generateDebugCodeByCategory generates debug code based on type category
+func generateDebugCodeByCategory(grp *jen.Group, fieldType ast.Expr, receiverId, fieldName, mapId string, useFormat bool) {
+	category := getTypeCategory(fieldType)
+	switch category {
+	case typeCategoryPrimitive:
+		generateDebugCodeForPrimitive(grp, receiverId, fieldName, fieldType, mapId)
+	case typeCategoryPointer:
+		generateDebugCodeForPointer(grp, receiverId, fieldName, fieldType, mapId)
+	case typeCategorySlice:
+		if useFormat {
+			generateDebugCodeForSliceFormat(grp, receiverId, fieldName, fieldType, mapId)
+		} else {
+			generateDebugCodeForSliceSize(grp, receiverId, fieldName, mapId)
+		}
+	case typeCategoryMap:
+		if useFormat {
+			generateDebugCodeForMapFormat(grp, receiverId, fieldName, mapId)
+		} else {
+			generateDebugCodeForMapSize(grp, receiverId, fieldName, mapId)
+		}
+	default:
+		// Complex types: direct assignment
+		grp.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Id(receiverId).Dot(fieldName)
+	}
 }
 
 func writeXWithOptionsAST(buf *jen.File, c Config) {
@@ -546,8 +551,8 @@ func writeAllWithOptFuncsAST(buf *jen.File, st *ast.StructType, outdir string, c
 
 // writeSliceWithOptAST generates a With* method for slice fields using AST (appends)
 func writeSliceWithOptAST(buf *jen.File, fieldName string, fieldTypeAST ast.Expr, c Config, resolver *ImportResolver) {
-	fieldFuncName := fmt.Sprintf("With%s%s", c.prefix(), strings.Title(fieldName))
-	buf.Comment(fmt.Sprintf("%s returns an option that can append %ss to %s.%s", fieldFuncName, strings.Title(fieldName), c.StructName, fieldName))
+	fieldFuncName := fmt.Sprintf("With%s%s", c.prefix(), toTitle(fieldName))
+	buf.Comment(fmt.Sprintf("%s returns an option that can append %ss to %s.%s", fieldFuncName, toTitle(fieldName), c.StructName, fieldName))
 
 	// Extract element type from slice/array AST
 	var elemType jen.Code
@@ -570,24 +575,13 @@ func writeSliceWithOptAST(buf *jen.File, fieldName string, fieldTypeAST ast.Expr
 
 // writeSliceSetOptAST generates a Set* method for slice fields using AST (replaces)
 func writeSliceSetOptAST(buf *jen.File, fieldName string, fieldType jen.Code, c Config) {
-	fieldFuncName := fmt.Sprintf("Set%s%s", c.prefix(), strings.Title(fieldName))
-	buf.Comment(fmt.Sprintf("%s returns an option that can set %s on a %s", fieldFuncName, strings.Title(fieldName), c.StructName))
-
-	buf.Func().Id(fieldFuncName).Params(
-		jen.Id(unexport(fieldName)).Add(fieldType),
-	).Id(c.OptTypeName).BlockFunc(func(grp *jen.Group) {
-		grp.Return(
-			jen.Func().Params(jen.Id(c.ReceiverId).Op("*").Add(c.StructRef...)).BlockFunc(func(grp2 *jen.Group) {
-				grp2.Id(c.ReceiverId).Op(".").Id(fieldName).Op("=").Id(unexport(fieldName))
-			}),
-		)
-	})
+	writeSetterOptAST(buf, "Set", fieldName, fieldType, c)
 }
 
 // writeMapWithOptAST generates a With* method for map fields using AST (adds key-value)
 func writeMapWithOptAST(buf *jen.File, fieldName string, fieldTypeAST ast.Expr, c Config, resolver *ImportResolver) {
-	fieldFuncName := fmt.Sprintf("With%s%s", c.prefix(), strings.Title(fieldName))
-	buf.Comment(fmt.Sprintf("%s returns an option that can append %ss to %s.%s", fieldFuncName, strings.Title(fieldName), c.StructName, fieldName))
+	fieldFuncName := fmt.Sprintf("With%s%s", c.prefix(), toTitle(fieldName))
+	buf.Comment(fmt.Sprintf("%s returns an option that can append %ss to %s.%s", fieldFuncName, toTitle(fieldName), c.StructName, fieldName))
 
 	// Extract key and value types from map AST
 	var keyType, valueType jen.Code
@@ -613,24 +607,18 @@ func writeMapWithOptAST(buf *jen.File, fieldName string, fieldTypeAST ast.Expr, 
 
 // writeMapSetOptAST generates a Set* method for map fields using AST (replaces)
 func writeMapSetOptAST(buf *jen.File, fieldName string, fieldType jen.Code, c Config) {
-	fieldFuncName := fmt.Sprintf("Set%s%s", c.prefix(), strings.Title(fieldName))
-	buf.Comment(fmt.Sprintf("%s returns an option that can set %s on a %s", fieldFuncName, strings.Title(fieldName), c.StructName))
-
-	buf.Func().Id(fieldFuncName).Params(
-		jen.Id(unexport(fieldName)).Add(fieldType),
-	).Id(c.OptTypeName).BlockFunc(func(grp *jen.Group) {
-		grp.Return(
-			jen.Func().Params(jen.Id(c.ReceiverId).Op("*").Add(c.StructRef...)).BlockFunc(func(grp2 *jen.Group) {
-				grp2.Id(c.ReceiverId).Op(".").Id(fieldName).Op("=").Id(unexport(fieldName))
-			}),
-		)
-	})
+	writeSetterOptAST(buf, "Set", fieldName, fieldType, c)
 }
 
 // writeStandardWithOptAST generates a With* method for standard fields using AST
 func writeStandardWithOptAST(buf *jen.File, fieldName string, fieldType jen.Code, c Config) {
-	fieldFuncName := fmt.Sprintf("With%s%s", c.prefix(), strings.Title(fieldName))
-	buf.Comment(fmt.Sprintf("%s returns an option that can set %s on a %s", fieldFuncName, strings.Title(fieldName), c.StructName))
+	writeSetterOptAST(buf, "With", fieldName, fieldType, c)
+}
+
+// writeSetterOptAST generates a setter option function (used by slice, map, and standard setters)
+func writeSetterOptAST(buf *jen.File, funcPrefix, fieldName string, fieldType jen.Code, c Config) {
+	fieldFuncName := fmt.Sprintf("%s%s%s", funcPrefix, c.prefix(), toTitle(fieldName))
+	buf.Comment(fmt.Sprintf("%s returns an option that can set %s on a %s", fieldFuncName, toTitle(fieldName), c.StructName))
 
 	buf.Func().Id(fieldFuncName).Params(
 		jen.Id(unexport(fieldName)).Add(fieldType),
@@ -703,19 +691,19 @@ func getTypeCategory(expr ast.Expr) string {
 		case "string", "int", "int8", "int16", "int32", "int64",
 			"uint", "uint8", "uint16", "uint32", "uint64",
 			"bool", "float32", "float64":
-			return "primitive"
+			return typeCategoryPrimitive
 		default:
 			return "complex"
 		}
 	case *ast.StarExpr:
-		return "pointer"
+		return typeCategoryPointer
 	case *ast.ArrayType:
 		if t.Len == nil {
-			return "slice"
+			return typeCategorySlice
 		}
 		return "array"
 	case *ast.MapType:
-		return "map"
+		return typeCategoryMap
 	default:
 		return "complex"
 	}
@@ -768,16 +756,7 @@ func generateDebugCodeForPointer(grp *jen.Group, receiverId, fieldName string, f
 
 // generateDebugCodeForSliceSize generates code for slice with size display (visible tag)
 func generateDebugCodeForSliceSize(grp *jen.Group, receiverId, fieldName, mapId string) {
-	fieldAccess := jen.Id(receiverId).Dot(fieldName)
-
-	grp.If(jen.Add(fieldAccess).Op("==").Nil()).Block(
-		jen.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Lit("nil"),
-	).Else().Block(
-		jen.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Qual("fmt", "Sprintf").Call(
-			jen.Lit("(slice of size %d)"),
-			jen.Len(fieldAccess),
-		),
-	)
+	generateDebugCodeForCollectionSize(grp, receiverId, fieldName, mapId, "slice")
 }
 
 // generateDebugCodeForSliceFormat generates code for slice with expanded values (visible-format tag)
@@ -809,13 +788,18 @@ func generateDebugCodeForSliceFormat(grp *jen.Group, receiverId, fieldName strin
 
 // generateDebugCodeForMapSize generates code for map with size display (visible tag)
 func generateDebugCodeForMapSize(grp *jen.Group, receiverId, fieldName, mapId string) {
+	generateDebugCodeForCollectionSize(grp, receiverId, fieldName, mapId, "map")
+}
+
+// generateDebugCodeForCollectionSize generates code for slice/map with size display
+func generateDebugCodeForCollectionSize(grp *jen.Group, receiverId, fieldName, mapId, collectionType string) {
 	fieldAccess := jen.Id(receiverId).Dot(fieldName)
 
 	grp.If(jen.Add(fieldAccess).Op("==").Nil()).Block(
 		jen.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Lit("nil"),
 	).Else().Block(
 		jen.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Qual("fmt", "Sprintf").Call(
-			jen.Lit("(map of size %d)"),
+			jen.Lit(fmt.Sprintf("(%s of size %%d)", collectionType)),
 			jen.Len(fieldAccess),
 		),
 	)
@@ -839,7 +823,7 @@ func generateDebugCodeForMapFormat(grp *jen.Group, receiverId, fieldName, mapId 
 func generateDebugCodeForSensitive(grp *jen.Group, receiverId, fieldName string, fieldType ast.Expr, category, mapId string) {
 	fieldAccess := jen.Id(receiverId).Dot(fieldName)
 
-	if category == "pointer" {
+	if category == typeCategoryPointer {
 		// Pointer: check nil first
 		grp.If(jen.Add(fieldAccess).Op("==").Nil()).Block(
 			jen.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Lit("nil"),
@@ -874,5 +858,15 @@ func unexport(s string) string {
 	}
 	r := []rune(s)
 	r[0] = unicode.ToLower(r[0])
+	return string(r)
+}
+
+// toTitle capitalizes the first letter of a string (replaces deprecated strings.Title)
+func toTitle(s string) string {
+	if len(s) == 0 {
+		return s
+	}
+	r := []rune(s)
+	r[0] = unicode.ToUpper(r[0])
 	return string(r)
 }

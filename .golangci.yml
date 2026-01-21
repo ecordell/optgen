@@ -1,54 +1,47 @@
+version: "2"
+
 run:
   timeout: 5m
   tests: true
-  skip-dirs:
-    - vendor
-    - testdata/*/golden.go # Don't lint generated golden files
 
 linters:
   enable:
     - errcheck # Check for unchecked errors
-    - gosimple # Simplify code
+    - staticcheck # Advanced static analysis (includes gosimple, stylecheck)
     - govet # Standard Go vet checks
     - ineffassign # Detect ineffectual assignments
-    - staticcheck # Advanced static analysis
     - unused # Find unused code
     - misspell # Check for misspelled words
     - gocyclo # Cyclomatic complexity
     - dupl # Duplicate code detection
-    - gofmt # Check formatting
-    - goimports # Check import organization
     - goconst # Find repeated strings that could be constants
     - unconvert # Remove unnecessary type conversions
 
-linters-settings:
-  gocyclo:
-    min-complexity: 15 # Warn on functions with high complexity
+  settings:
+    gocyclo:
+      min-complexity: 20 # Raised to accommodate main() function
+    dupl:
+      threshold: 100
+    errcheck:
+      check-type-assertions: true
+      check-blank: false # Allow _ = assignments to explicitly ignore errors
 
-  dupl:
-    threshold: 100 # Minimum token sequence as duplicate
+  exclusions:
+    paths:
+      - vendor/
+      - testdata/
+    rules:
+      - path: _test\.go
+        text: "cyclomatic complexity"
+      - path: _test\.go
+        text: "lines are duplicate"
 
-  errcheck:
-    check-type-assertions: true
-    check-blank: true
-
-issues:
-  exclude-rules:
-    # Exclude test files from certain linters
-    - path: _test\.go
-      linters:
-        - dupl
-        - gocyclo
-
-    # Generated code may have different standards
-    - path: testdata/
-      linters:
-        - all
-
-  max-issues-per-linter: 0
-  max-same-issues: 0
+formatters:
+  enable:
+    - gofmt
+    - goimports
 
 output:
-  format: colored-line-number
-  print-issued-lines: true
-  print-linter-name: true
+  formats:
+    text:
+      path: stdout

@@ -17,7 +17,9 @@ func TestGoldenFiles(t *testing.T) {
 	if err := buildCmd.Run(); err != nil {
 		t.Fatalf("failed to build optgen: %v", err)
 	}
-	defer os.Remove("optgen_testbin")
+	defer func() {
+		_ = os.Remove("optgen_testbin")
+	}()
 
 	tests := []struct {
 		name       string
@@ -40,7 +42,9 @@ func TestGoldenFiles(t *testing.T) {
 			goldenFile := filepath.Join(tt.inputDir, "golden.go")
 
 			// Clean up any existing output
-			defer os.Remove(outputFile)
+			defer func() {
+				_ = os.Remove(outputFile)
+			}()
 
 			// Run optgen
 			cmd := exec.Command("./optgen_testbin", "-output="+outputFile, tt.inputDir, tt.structName)
