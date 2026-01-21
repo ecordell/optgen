@@ -430,7 +430,20 @@ func writeDebugMapAST(buf *jen.File, st *ast.StructType, c Config, sensitiveName
 						}
 					}
 
-					grp.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Qual("github.com/ecordell/optgen/helpers", "DebugValue").Call(jen.Id(c.ReceiverId).Dot(fieldName), jen.Lit(false))
+					category := getTypeCategory(field.Type)
+					switch category {
+					case "primitive":
+						generateDebugCodeForPrimitive(grp, c.ReceiverId, fieldName, field.Type, mapId)
+					case "pointer":
+						generateDebugCodeForPointer(grp, c.ReceiverId, fieldName, field.Type, mapId)
+					case "slice":
+						generateDebugCodeForSliceSize(grp, c.ReceiverId, fieldName, mapId)
+					case "map":
+						generateDebugCodeForMapSize(grp, c.ReceiverId, fieldName, mapId)
+					default:
+						// Complex types: direct assignment
+						grp.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Id(c.ReceiverId).Dot(fieldName)
+					}
 
 				case "visible-format":
 					// Check that sensitive field names are not marked as visible-format
@@ -441,14 +454,28 @@ func writeDebugMapAST(buf *jen.File, st *ast.StructType, c Config, sensitiveName
 						}
 					}
 
-					grp.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Qual("github.com/ecordell/optgen/helpers", "DebugValue").Call(jen.Id(c.ReceiverId).Dot(fieldName), jen.Lit(true))
+					category := getTypeCategory(field.Type)
+					switch category {
+					case "primitive":
+						generateDebugCodeForPrimitive(grp, c.ReceiverId, fieldName, field.Type, mapId)
+					case "pointer":
+						generateDebugCodeForPointer(grp, c.ReceiverId, fieldName, field.Type, mapId)
+					case "slice":
+						generateDebugCodeForSliceFormat(grp, c.ReceiverId, fieldName, field.Type, mapId)
+					case "map":
+						generateDebugCodeForMapFormat(grp, c.ReceiverId, fieldName, mapId)
+					default:
+						// Complex types: direct assignment
+						grp.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Id(c.ReceiverId).Dot(fieldName)
+					}
 
 				case "hidden":
 					// Skip this field entirely
 					continue
 
 				case "sensitive":
-					grp.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Qual("github.com/ecordell/optgen/helpers", "SensitiveDebugValue").Call(jen.Id(c.ReceiverId).Dot(fieldName))
+					category := getTypeCategory(field.Type)
+					generateDebugCodeForSensitive(grp, c.ReceiverId, fieldName, field.Type, category, mapId)
 
 				default:
 					fmt.Printf("unknown value '%s' for debugmap tag on field %s in type %s\n", tagValue, fieldName, c.TargetTypeName)
@@ -663,6 +690,170 @@ func astTypeToJenCode(expr ast.Expr, resolver *ImportResolver) jen.Code {
 	default:
 		// Fallback to interface{} for unknown types
 		return jen.Interface()
+	}
+}
+
+// getTypeCategory returns the category of a type for debug generation
+func getTypeCategory(expr ast.Expr) string {
+	switch t := expr.(type) {
+	case *ast.Ident:
+		switch t.Name {
+		case "string", "int", "int8", "int16", "int32", "int64",
+			"uint", "uint8", "uint16", "uint32", "uint64",
+			"bool", "float32", "float64":
+			return "primitive"
+		default:
+			return "complex"
+		}
+	case *ast.StarExpr:
+		return "pointer"
+	case *ast.ArrayType:
+		if t.Len == nil {
+			return "slice"
+		}
+		return "array"
+	case *ast.MapType:
+		return "map"
+	default:
+		return "complex"
+	}
+}
+
+// isStringType checks if a type is a string
+func isStringType(expr ast.Expr) bool {
+	if ident, ok := expr.(*ast.Ident); ok {
+		return ident.Name == "string"
+	}
+	return false
+}
+
+// getSliceElementType returns the element type of a slice/array
+func getSliceElementType(expr ast.Expr) ast.Expr {
+	if arrayType, ok := expr.(*ast.ArrayType); ok {
+		return arrayType.Elt
+	}
+	return nil
+}
+
+// generateDebugCodeForPrimitive handles primitive types (string, int, bool, float)
+func generateDebugCodeForPrimitive(grp *jen.Group, receiverId, fieldName string, fieldType ast.Expr, mapId string) {
+	fieldAccess := jen.Id(receiverId).Dot(fieldName)
+
+	if isStringType(fieldType) {
+		// String: check for empty
+		grp.If(jen.Add(fieldAccess).Op("==").Lit("")).Block(
+			jen.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Lit("(empty)"),
+		).Else().Block(
+			jen.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Add(fieldAccess),
+		)
+	} else {
+		// Other primitives: direct assignment
+		grp.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Add(fieldAccess)
+	}
+}
+
+// generateDebugCodeForPointer handles pointer types
+func generateDebugCodeForPointer(grp *jen.Group, receiverId, fieldName string, fieldType ast.Expr, mapId string) {
+	fieldAccess := jen.Id(receiverId).Dot(fieldName)
+
+	// Check for nil, then dereference
+	grp.If(jen.Add(fieldAccess).Op("==").Nil()).Block(
+		jen.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Lit("nil"),
+	).Else().Block(
+		jen.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Op("*").Add(fieldAccess),
+	)
+}
+
+// generateDebugCodeForSliceSize generates code for slice with size display (visible tag)
+func generateDebugCodeForSliceSize(grp *jen.Group, receiverId, fieldName, mapId string) {
+	fieldAccess := jen.Id(receiverId).Dot(fieldName)
+
+	grp.If(jen.Add(fieldAccess).Op("==").Nil()).Block(
+		jen.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Lit("nil"),
+	).Else().Block(
+		jen.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Qual("fmt", "Sprintf").Call(
+			jen.Lit("(slice of size %d)"),
+			jen.Len(fieldAccess),
+		),
+	)
+}
+
+// generateDebugCodeForSliceFormat generates code for slice with expanded values (visible-format tag)
+func generateDebugCodeForSliceFormat(grp *jen.Group, receiverId, fieldName string, fieldType ast.Expr, mapId string) {
+	fieldAccess := jen.Id(receiverId).Dot(fieldName)
+	elemType := getSliceElementType(fieldType)
+	debugVarName := "debug" + fieldName
+
+	grp.If(jen.Add(fieldAccess).Op("==").Nil()).Block(
+		jen.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Lit("nil"),
+	).Else().Block(
+		jen.Id(debugVarName).Op(":=").Make(jen.Index().Any(), jen.Lit(0), jen.Len(fieldAccess)),
+		jen.For(jen.List(jen.Id("_"), jen.Id("v")).Op(":=").Range().Add(fieldAccess)).BlockFunc(func(forGrp *jen.Group) {
+			if elemType != nil && isStringType(elemType) {
+				// String slice: check for empty strings
+				forGrp.If(jen.Id("v").Op("==").Lit("")).Block(
+					jen.Id(debugVarName).Op("=").Append(jen.Id(debugVarName), jen.Lit("(empty)")),
+				).Else().Block(
+					jen.Id(debugVarName).Op("=").Append(jen.Id(debugVarName), jen.Id("v")),
+				)
+			} else {
+				// Other types: direct append
+				forGrp.Id(debugVarName).Op("=").Append(jen.Id(debugVarName), jen.Id("v"))
+			}
+		}),
+		jen.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Id(debugVarName),
+	)
+}
+
+// generateDebugCodeForMapSize generates code for map with size display (visible tag)
+func generateDebugCodeForMapSize(grp *jen.Group, receiverId, fieldName, mapId string) {
+	fieldAccess := jen.Id(receiverId).Dot(fieldName)
+
+	grp.If(jen.Add(fieldAccess).Op("==").Nil()).Block(
+		jen.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Lit("nil"),
+	).Else().Block(
+		jen.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Qual("fmt", "Sprintf").Call(
+			jen.Lit("(map of size %d)"),
+			jen.Len(fieldAccess),
+		),
+	)
+}
+
+// generateDebugCodeForMapFormat generates code for map with expanded values (visible-format tag)
+func generateDebugCodeForMapFormat(grp *jen.Group, receiverId, fieldName, mapId string) {
+	fieldAccess := jen.Id(receiverId).Dot(fieldName)
+
+	grp.If(jen.Add(fieldAccess).Op("==").Nil()).Block(
+		jen.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Lit("nil"),
+	).Else().Block(
+		jen.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Qual("fmt", "Sprintf").Call(
+			jen.Lit("%v"),
+			fieldAccess,
+		),
+	)
+}
+
+// generateDebugCodeForSensitive generates code for sensitive fields
+func generateDebugCodeForSensitive(grp *jen.Group, receiverId, fieldName string, fieldType ast.Expr, category, mapId string) {
+	fieldAccess := jen.Id(receiverId).Dot(fieldName)
+
+	if category == "pointer" {
+		// Pointer: check nil first
+		grp.If(jen.Add(fieldAccess).Op("==").Nil()).Block(
+			jen.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Lit("nil"),
+		).Else().Block(
+			jen.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Lit("(sensitive)"),
+		)
+	} else if isStringType(fieldType) {
+		// String: check empty
+		grp.If(jen.Add(fieldAccess).Op("==").Lit("")).Block(
+			jen.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Lit("(empty)"),
+		).Else().Block(
+			jen.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Lit("(sensitive)"),
+		)
+	} else {
+		// Other types: just mark as sensitive
+		grp.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Lit("(sensitive)")
 	}
 }
 

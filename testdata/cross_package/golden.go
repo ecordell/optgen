@@ -3,7 +3,6 @@ package testdata
 
 import (
 	defaults "github.com/creasty/defaults"
-	helpers "github.com/ecordell/optgen/helpers"
 	"time"
 )
 
@@ -40,9 +39,13 @@ func (c *CrossPackage) ToOption() CrossPackageOption {
 // DebugMap returns a map form of CrossPackage for debugging
 func (c *CrossPackage) DebugMap() map[string]any {
 	debugMap := map[string]any{}
-	debugMap["Name"] = helpers.DebugValue(c.Name, false)
-	debugMap["Timestamp"] = helpers.DebugValue(c.Timestamp, false)
-	debugMap["Duration"] = helpers.DebugValue(c.Duration, false)
+	if c.Name == "" {
+		debugMap["Name"] = "(empty)"
+	} else {
+		debugMap["Name"] = c.Name
+	}
+	debugMap["Timestamp"] = c.Timestamp
+	debugMap["Duration"] = c.Duration
 	return debugMap
 }
 

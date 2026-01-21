@@ -2,8 +2,8 @@
 package testdata
 
 import (
+	"fmt"
 	defaults "github.com/creasty/defaults"
-	helpers "github.com/ecordell/optgen/helpers"
 )
 
 type FormatTestOption func(f *FormatTest)
@@ -39,9 +39,17 @@ func (f *FormatTest) ToOption() FormatTestOption {
 // DebugMap returns a map form of FormatTest for debugging
 func (f *FormatTest) DebugMap() map[string]any {
 	debugMap := map[string]any{}
-	debugMap["Name"] = helpers.DebugValue(f.Name, false)
-	debugMap["Data"] = helpers.DebugValue(f.Data, true)
-	debugMap["Count"] = helpers.DebugValue(f.Count, false)
+	if f.Name == "" {
+		debugMap["Name"] = "(empty)"
+	} else {
+		debugMap["Name"] = f.Name
+	}
+	if f.Data == nil {
+		debugMap["Data"] = "nil"
+	} else {
+		debugMap["Data"] = fmt.Sprintf("%v", f.Data)
+	}
+	debugMap["Count"] = f.Count
 	return debugMap
 }
 

@@ -4,7 +4,6 @@ package testdata
 import (
 	"database/sql"
 	defaults "github.com/creasty/defaults"
-	helpers "github.com/ecordell/optgen/helpers"
 )
 
 type DatabaseConfigOption func(d *DatabaseConfig)
@@ -40,9 +39,9 @@ func (d *DatabaseConfig) ToOption() DatabaseConfigOption {
 // DebugMap returns a map form of DatabaseConfig for debugging
 func (d *DatabaseConfig) DebugMap() map[string]any {
 	debugMap := map[string]any{}
-	debugMap["ConnectionString"] = helpers.SensitiveDebugValue(d.ConnectionString)
-	debugMap["MaxConnections"] = helpers.DebugValue(d.MaxConnections, false)
-	debugMap["Enabled"] = helpers.DebugValue(d.Enabled, false)
+	debugMap["ConnectionString"] = "(sensitive)"
+	debugMap["MaxConnections"] = d.MaxConnections
+	debugMap["Enabled"] = d.Enabled
 	return debugMap
 }
 

@@ -2,8 +2,8 @@
 package testdata
 
 import (
+	"fmt"
 	defaults "github.com/creasty/defaults"
-	helpers "github.com/ecordell/optgen/helpers"
 )
 
 type SlicesAndMapsOption func(s *SlicesAndMaps)
@@ -39,9 +39,33 @@ func (s *SlicesAndMaps) ToOption() SlicesAndMapsOption {
 // DebugMap returns a map form of SlicesAndMaps for debugging
 func (s *SlicesAndMaps) DebugMap() map[string]any {
 	debugMap := map[string]any{}
-	debugMap["Tags"] = helpers.DebugValue(s.Tags, true)
-	debugMap["Metadata"] = helpers.DebugValue(s.Metadata, true)
-	debugMap["Ports"] = helpers.DebugValue(s.Ports, true)
+	if s.Tags == nil {
+		debugMap["Tags"] = "nil"
+	} else {
+		debugTags := make([]any, 0, len(s.Tags))
+		for _, v := range s.Tags {
+			if v == "" {
+				debugTags = append(debugTags, "(empty)")
+			} else {
+				debugTags = append(debugTags, v)
+			}
+		}
+		debugMap["Tags"] = debugTags
+	}
+	if s.Metadata == nil {
+		debugMap["Metadata"] = "nil"
+	} else {
+		debugMap["Metadata"] = fmt.Sprintf("%v", s.Metadata)
+	}
+	if s.Ports == nil {
+		debugMap["Ports"] = "nil"
+	} else {
+		debugPorts := make([]any, 0, len(s.Ports))
+		for _, v := range s.Ports {
+			debugPorts = append(debugPorts, v)
+		}
+		debugMap["Ports"] = debugPorts
+	}
 	return debugMap
 }
 

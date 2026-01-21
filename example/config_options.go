@@ -2,8 +2,8 @@
 package example
 
 import (
+	"fmt"
 	defaults "github.com/creasty/defaults"
-	helpers "github.com/ecordell/optgen/helpers"
 )
 
 type ConfigOption func(c *Config)
@@ -43,13 +43,37 @@ func (c *Config) ToOption() ConfigOption {
 // DebugMap returns a map form of Config for debugging
 func (c *Config) DebugMap() map[string]any {
 	debugMap := map[string]any{}
-	debugMap["Name"] = helpers.DebugValue(c.Name, false)
-	debugMap["Port"] = helpers.DebugValue(c.Port, false)
-	debugMap["Enabled"] = helpers.DebugValue(c.Enabled, false)
-	debugMap["Timeout"] = helpers.DebugValue(c.Timeout, false)
-	debugMap["Tags"] = helpers.DebugValue(c.Tags, true)
-	debugMap["Metadata"] = helpers.DebugValue(c.Metadata, true)
-	debugMap["Debug"] = helpers.DebugValue(c.Debug, false)
+	if c.Name == "" {
+		debugMap["Name"] = "(empty)"
+	} else {
+		debugMap["Name"] = c.Name
+	}
+	debugMap["Port"] = c.Port
+	debugMap["Enabled"] = c.Enabled
+	if c.Timeout == nil {
+		debugMap["Timeout"] = "nil"
+	} else {
+		debugMap["Timeout"] = *c.Timeout
+	}
+	if c.Tags == nil {
+		debugMap["Tags"] = "nil"
+	} else {
+		debugTags := make([]any, 0, len(c.Tags))
+		for _, v := range c.Tags {
+			if v == "" {
+				debugTags = append(debugTags, "(empty)")
+			} else {
+				debugTags = append(debugTags, v)
+			}
+		}
+		debugMap["Tags"] = debugTags
+	}
+	if c.Metadata == nil {
+		debugMap["Metadata"] = "nil"
+	} else {
+		debugMap["Metadata"] = fmt.Sprintf("%v", c.Metadata)
+	}
+	debugMap["Debug"] = c.Debug
 	return debugMap
 }
 
@@ -168,12 +192,24 @@ func (s *Server) ToOption() ServerOption {
 // DebugMap returns a map form of Server for debugging
 func (s *Server) DebugMap() map[string]any {
 	debugMap := map[string]any{}
-	debugMap["Host"] = helpers.DebugValue(s.Host, false)
-	debugMap["Port"] = helpers.DebugValue(s.Port, false)
-	debugMap["TLS"] = helpers.DebugValue(s.TLS, false)
-	debugMap["Cert"] = helpers.SensitiveDebugValue(s.Cert)
-	debugMap["Key"] = helpers.SensitiveDebugValue(s.Key)
-	debugMap["Workers"] = helpers.DebugValue(s.Workers, false)
+	if s.Host == "" {
+		debugMap["Host"] = "(empty)"
+	} else {
+		debugMap["Host"] = s.Host
+	}
+	debugMap["Port"] = s.Port
+	debugMap["TLS"] = s.TLS
+	if s.Cert == "" {
+		debugMap["Cert"] = "(empty)"
+	} else {
+		debugMap["Cert"] = "(sensitive)"
+	}
+	if s.Key == "" {
+		debugMap["Key"] = "(empty)"
+	} else {
+		debugMap["Key"] = "(sensitive)"
+	}
+	debugMap["Workers"] = s.Workers
 	return debugMap
 }
 
