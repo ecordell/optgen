@@ -53,6 +53,12 @@ func (f *FormatTest) DebugMap() map[string]any {
 	return debugMap
 }
 
+// FlatDebugMap returns a flattened map form of FormatTest for debugging
+// Nested maps are flattened using dot notation (e.g., "parent.child.field")
+func (f *FormatTest) FlatDebugMap() map[string]any {
+	return flattenDebugMap(f.DebugMap())
+}
+
 // FormatTestWithOptions configures an existing FormatTest with the passed in options set
 func FormatTestWithOptions(f *FormatTest, opts ...FormatTestOption) *FormatTest {
 	for _, o := range opts {
@@ -95,4 +101,20 @@ func WithCount(count int) FormatTestOption {
 	return func(f *FormatTest) {
 		f.Count = count
 	}
+}
+
+// flattenDebugMap recursively flattens nested maps using dot notation
+func flattenDebugMap(debugMap map[string]any) map[string]any {
+	flattened := make(map[string]any, len(debugMap))
+	for key, value := range debugMap {
+		childMap, ok := value.(map[string]any)
+		if ok {
+			for fk, fv := range flattenDebugMap(childMap) {
+				flattened[key+"."+fk] = fv
+			}
+			continue
+		}
+		flattened[key] = value
+	}
+	return flattened
 }

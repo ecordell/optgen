@@ -52,6 +52,12 @@ func (b *BasicConfig) DebugMap() map[string]any {
 	return debugMap
 }
 
+// FlatDebugMap returns a flattened map form of BasicConfig for debugging
+// Nested maps are flattened using dot notation (e.g., "parent.child.field")
+func (b *BasicConfig) FlatDebugMap() map[string]any {
+	return flattenDebugMap(b.DebugMap())
+}
+
 // BasicConfigWithOptions configures an existing BasicConfig with the passed in options set
 func BasicConfigWithOptions(b *BasicConfig, opts ...BasicConfigOption) *BasicConfig {
 	for _, o := range opts {
@@ -94,4 +100,20 @@ func WithTimeout(timeout *int) BasicConfigOption {
 	return func(b *BasicConfig) {
 		b.Timeout = timeout
 	}
+}
+
+// flattenDebugMap recursively flattens nested maps using dot notation
+func flattenDebugMap(debugMap map[string]any) map[string]any {
+	flattened := make(map[string]any, len(debugMap))
+	for key, value := range debugMap {
+		childMap, ok := value.(map[string]any)
+		if ok {
+			for fk, fv := range flattenDebugMap(childMap) {
+				flattened[key+"."+fk] = fv
+			}
+			continue
+		}
+		flattened[key] = value
+	}
+	return flattened
 }

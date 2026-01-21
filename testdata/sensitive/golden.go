@@ -60,6 +60,12 @@ func (c *Credentials) DebugMap() map[string]any {
 	return debugMap
 }
 
+// FlatDebugMap returns a flattened map form of Credentials for debugging
+// Nested maps are flattened using dot notation (e.g., "parent.child.field")
+func (c *Credentials) FlatDebugMap() map[string]any {
+	return flattenDebugMap(c.DebugMap())
+}
+
 // CredentialsWithOptions configures an existing Credentials with the passed in options set
 func CredentialsWithOptions(c *Credentials, opts ...CredentialsOption) *Credentials {
 	for _, o := range opts {
@@ -102,4 +108,20 @@ func WithHost(host string) CredentialsOption {
 	return func(c *Credentials) {
 		c.Host = host
 	}
+}
+
+// flattenDebugMap recursively flattens nested maps using dot notation
+func flattenDebugMap(debugMap map[string]any) map[string]any {
+	flattened := make(map[string]any, len(debugMap))
+	for key, value := range debugMap {
+		childMap, ok := value.(map[string]any)
+		if ok {
+			for fk, fv := range flattenDebugMap(childMap) {
+				flattened[key+"."+fk] = fv
+			}
+			continue
+		}
+		flattened[key] = value
+	}
+	return flattened
 }

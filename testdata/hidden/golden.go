@@ -49,6 +49,12 @@ func (h *HiddenFields) DebugMap() map[string]any {
 	return debugMap
 }
 
+// FlatDebugMap returns a flattened map form of HiddenFields for debugging
+// Nested maps are flattened using dot notation (e.g., "parent.child.field")
+func (h *HiddenFields) FlatDebugMap() map[string]any {
+	return flattenDebugMap(h.DebugMap())
+}
+
 // HiddenFieldsWithOptions configures an existing HiddenFields with the passed in options set
 func HiddenFieldsWithOptions(h *HiddenFields, opts ...HiddenFieldsOption) *HiddenFields {
 	for _, o := range opts {
@@ -84,4 +90,20 @@ func WithAnotherName(anotherName string) HiddenFieldsOption {
 	return func(h *HiddenFields) {
 		h.AnotherName = anotherName
 	}
+}
+
+// flattenDebugMap recursively flattens nested maps using dot notation
+func flattenDebugMap(debugMap map[string]any) map[string]any {
+	flattened := make(map[string]any, len(debugMap))
+	for key, value := range debugMap {
+		childMap, ok := value.(map[string]any)
+		if ok {
+			for fk, fv := range flattenDebugMap(childMap) {
+				flattened[key+"."+fk] = fv
+			}
+			continue
+		}
+		flattened[key] = value
+	}
+	return flattened
 }
