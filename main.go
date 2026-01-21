@@ -678,7 +678,7 @@ func isMapAST(t ast.Expr) bool {
 }
 
 // astTypeToJenCode converts an AST type expression to jen.Code for code generation.
-// It handles basic types, pointers, selectors, arrays, maps, interfaces, and channels.
+// It handles basic types, pointers, selectors, arrays, maps, interfaces, channels, and generics.
 func astTypeToJenCode(expr ast.Expr, resolver *ImportResolver) jen.Code {
 	switch t := expr.(type) {
 	case *ast.Ident:
@@ -711,6 +711,21 @@ func astTypeToJenCode(expr ast.Expr, resolver *ImportResolver) jen.Code {
 		default:
 			return jen.Chan().Add(astTypeToJenCode(t.Value, resolver))
 		}
+	case *ast.IndexExpr:
+		// Generic type with single type parameter: Type[T]
+		base := astTypeToJenCode(t.X, resolver)
+		typeParam := astTypeToJenCode(t.Index, resolver)
+		// Index() with types creates Type[T] syntax
+		return jen.Add(base).Types(typeParam)
+	case *ast.IndexListExpr:
+		// Generic type with multiple type parameters: Type[T, U, V]
+		base := astTypeToJenCode(t.X, resolver)
+		var params []jen.Code
+		for _, index := range t.Indices {
+			params = append(params, astTypeToJenCode(index, resolver))
+		}
+		// Types() with multiple params creates Type[T, U, V] syntax
+		return jen.Add(base).Types(params...)
 	default:
 		// Fallback to interface{} for unknown types
 		return jen.Interface()
