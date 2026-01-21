@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [ master ]
+    branches: [master]
   pull_request:
-    branches: [ '**' ]
+    branches: ["**"]
 
 jobs:
   test:
@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        go-version: ['1.20', '1.21', '1.22', '1.23', '1.25']
+        go-version: ["1.21", "1.22", "1.23", "1.24", "1.25"]
 
     steps:
       - name: Checkout code
@@ -25,11 +25,18 @@ jobs:
           go-version: ${{ matrix.go-version }}
           cache: true
 
+      - name: Install Mage
+        run: go install github.com/magefile/mage@latest
+
       - name: Download dependencies
         run: go mod download
 
       - name: Run tests
-        run: go test -v -race -coverprofile=coverage.out ./...
+        run: mage test:unit
+
+      - name: Run tests with coverage
+        if: matrix.go-version == '1.25'
+        run: mage test:coverage
 
       - name: Upload coverage
         if: matrix.go-version == '1.25'
@@ -50,22 +57,17 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: "1.25"
           cache: true
 
-      - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v4
-        with:
-          version: latest
-          args: --timeout=5m
+      - name: Install Mage
+        run: go install github.com/magefile/mage@latest
 
-      - name: Check formatting
-        run: |
-          if [ -n "$(gofmt -l .)" ]; then
-            echo "Code is not properly formatted. Run 'gofmt -w .'"
-            gofmt -l .
-            exit 1
-          fi
+      - name: Install golangci-lint
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+
+      - name: Run linting
+        run: mage lint:go
 
   verify-generation:
     name: Verify Generated Files
@@ -78,19 +80,11 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: "1.25"
           cache: true
 
-      - name: Build optgen
-        run: go build -o optgen .
+      - name: Install Mage
+        run: go install github.com/magefile/mage@latest
 
-      - name: Regenerate example
-        run: ./optgen -output=example/config_options.go example Config Server
-
-      - name: Check for changes
-        run: |
-          if [ -n "$(git status --porcelain example/)" ]; then
-            echo "Generated files are out of date!"
-            git diff example/
-            exit 1
-          fi
+      - name: Verify generated files
+        run: mage gen:verify

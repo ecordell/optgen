@@ -40,8 +40,3 @@ formatters:
   enable:
     - gofmt
     - goimports
-
-output:
-  formats:
-    text:
-      path: stdout
