@@ -9,8 +9,11 @@
 ## Features
 
 - **Functional Option Generation**: Generates `With*` functions for struct fields
+- **Fine-Grained Control**: Use `optgen` struct tags to control generation per-field
+- **Unexported Field Support**: Generate public setters for private fields
+- **Generic Type Support**: Full support for generic types and type parameters
 - **Sensitive Field Handling**: Mark fields as sensitive to hide them in debug output
-- **DebugMap Generation**: Automatic debug-friendly map representations
+- **DebugMap Generation**: Automatic debug-friendly map representations with both nested and flat variants
 
 ## Installation
 
@@ -164,7 +167,55 @@ server := NewServerWithOptions(
 
 ### Struct Tags
 
-The `debugmap` tag controls how fields appear in the generated `DebugMap()` method:
+#### The `optgen` Tag
+
+The `optgen` tag provides fine-grained control over option generation for each field:
+
+| Tag Value | Behavior | Generated Functions |
+|-----------|----------|---------------------|
+| `generate` | Generate setter functions (default for exported fields) | `With*`, `Set*` (for slices/maps) |
+| `skip` | Don't generate any functions | None |
+| `readonly` | Include in `ToOption()` only, no setter | None (field copied via `ToOption()`) |
+
+**Visibility Control:**
+
+Add a second parameter to control function visibility (useful for unexported fields):
+
+- `optgen:"generate,public"` - Generate public setter for private field
+- `optgen:"generate,private"` - Generate private setter (even for exported field)
+- `optgen:"readonly,public"` - Include private field in `ToOption()` with public access
+
+**Examples:**
+
+```go
+type Config struct {
+    // Default: generates WithName (exported field, auto-generates)
+    Name string `debugmap:"visible"`
+    
+    // Skip generation entirely
+    Internal int `optgen:"skip" debugmap:"hidden"`
+    
+    // Readonly: included in ToOption() but no WithID function
+    ID string `optgen:"readonly" debugmap:"visible"`
+    
+    // Generate public setter for private field
+    maxRetries int `optgen:"generate,public" debugmap:"visible"`
+    
+    // Generate private setter (withCache) for exported field
+    Cache map[string]any `optgen:"generate,private" debugmap:"hidden"`
+}
+
+// Generated functions:
+// - WithName(string) ConfigOption
+// - WithMaxRetries(int) ConfigOption  (public function for private field!)
+// - withCache(map[string]any) ConfigOption  (private function)
+// 
+// ID and Internal are copied via ToOption() but have no setters
+```
+
+#### The `debugmap` Tag
+
+The `debugmap` tag controls how fields appear in the generated `DebugMap()` and `FlatDebugMap()` methods:
 
 | Tag Value | Behavior | Use Case |
 |-----------|----------|----------|
@@ -209,7 +260,8 @@ For each field:
 
 #### Utility Functions
 - `(c *Config) ToOption() ConfigOption` - Convert instance to option
-- `(c *Config) DebugMap() map[string]any` - Safe debug representation
+- `(c *Config) DebugMap() map[string]any` - Safe debug representation (nested structure)
+- `(c *Config) FlatDebugMap() map[string]any` - Flattened debug representation (all values at top level)
 
 ## Advanced Examples
 
@@ -274,6 +326,93 @@ devConfig := NewConfigWithOptions(
     WithName("development"),
     WithDebug(true),
 )
+```
+
+### Working with Generic Types
+
+optgen fully supports generic types, including type parameters, constraints, and nested generics:
+
+```go
+// Define generic types
+type Container[T any] struct {
+    Value T
+}
+
+type Pair[K comparable, V any] struct {
+    Key   K
+    Value V
+}
+
+// Use in your config
+type AppConfig struct {
+    StringContainer   Container[string]           `debugmap:"visible"`
+    IntContainer      Container[int]              `debugmap:"visible"`
+    Pairs             []Pair[string, int]         `debugmap:"visible"`
+    ContainerMap      map[string]Container[bool]  `debugmap:"visible"`
+}
+
+// Generated functions work seamlessly with generics
+config := NewAppConfigWithOptions(
+    WithStringContainer(Container[string]{Value: "hello"}),
+    WithIntContainer(Container[int]{Value: 42}),
+    WithPairs(Pair[string, int]{Key: "answer", Value: 42}),
+    WithContainerMap("enabled", Container[bool]{Value: true}),
+)
+```
+
+### Unexported Fields with Public Setters
+
+Generate public setters for private fields to expose controlled configuration while keeping internal state encapsulated:
+
+```go
+type Server struct {
+    // Public fields - normal behavior
+    Host string `debugmap:"visible"`
+    Port int    `debugmap:"visible"`
+    
+    // Private field with public setter
+    maxRetries int `optgen:"generate,public" debugmap:"visible"`
+    
+    // Private readonly field (accessible via ToOption only)
+    id string `optgen:"readonly,public" debugmap:"visible"`
+}
+
+// Usage: public API for private field
+server := NewServerWithOptions(
+    WithHost("localhost"),
+    WithPort(8080),
+    WithMaxRetries(3),  // Public function for private field!
+)
+
+// The field itself remains unexported
+// server.maxRetries  // Compile error: unexported field
+```
+
+### Debug Output: Nested vs Flat
+
+optgen generates both nested and flat debug map representations:
+
+```go
+type User struct {
+    Name     string            `debugmap:"visible"`
+    Password string            `debugmap:"sensitive"`
+    Metadata map[string]string `debugmap:"visible-format"`
+}
+
+user := NewUserWithOptions(
+    WithName("alice"),
+    WithPassword("secret123"),
+    WithMetadata("role", "admin"),
+    WithMetadata("dept", "engineering"),
+)
+
+// Nested structure (preserves types)
+fmt.Printf("%+v\n", user.DebugMap())
+// Output: map[Metadata:map[dept:engineering role:admin] Name:alice Password:(sensitive)]
+
+// Flat structure (all values at top level)
+fmt.Printf("%+v\n", user.FlatDebugMap())
+// Output: map[Metadata.dept:engineering Metadata.role:admin Name:alice Password:(sensitive)]
 ```
 
 ## License

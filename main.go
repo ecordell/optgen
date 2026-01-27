@@ -225,6 +225,12 @@ func (c Config) prefix() string {
 
 const (
 	DebugMapFieldTag = "debugmap"
+	OptgenFieldTag   = "optgen"
+
+	// OptgenFieldTag values
+	OptgenGenerate = "generate" // Default behavior
+	OptgenSkip     = "skip"     // Don't generate options
+	OptgenReadonly = "readonly" // Only in constructor
 
 	// Type categories for debug code generation
 	typeCategoryPrimitive = "primitive"
@@ -287,6 +293,63 @@ func parseStructTag(field *ast.Field, tagKey string) (string, error) {
 		return "", err
 	}
 	return tag.Value(), nil
+}
+
+// OptgenTagInfo contains parsed optgen tag information
+type OptgenTagInfo struct {
+	Action     string // "generate", "skip", "readonly", "custom"
+	Visibility string // "public", "private", "default"
+}
+
+// parseOptgenTag parses the optgen struct tag value.
+// Returns tag info including action and visibility.
+// If tag doesn't exist, returns default behavior based on field visibility.
+func parseOptgenTag(field *ast.Field) (OptgenTagInfo, bool) {
+	if field.Names == nil {
+		return OptgenTagInfo{Action: OptgenSkip, Visibility: "default"}, false
+	}
+
+	isExported := field.Names[0].IsExported()
+
+	tagValue, err := parseStructTag(field, OptgenFieldTag)
+	if err != nil {
+		// No tag present - use default behavior
+		action := OptgenSkip
+		if isExported {
+			action = OptgenGenerate
+		}
+		return OptgenTagInfo{Action: action, Visibility: "default"}, false
+	}
+
+	// Parse comma-separated values: "generate,public"
+	parts := strings.Split(tagValue, ",")
+	info := OptgenTagInfo{
+		Action:     strings.TrimSpace(parts[0]),
+		Visibility: "default",
+	}
+
+	// Validate action
+	switch info.Action {
+	case OptgenGenerate, OptgenSkip, OptgenReadonly:
+		// Valid
+	default:
+		fmt.Printf("unknown optgen action '%s' on field %s\n", info.Action, field.Names[0].Name)
+		os.Exit(1)
+	}
+
+	// Parse visibility if present
+	if len(parts) > 1 {
+		visibility := strings.TrimSpace(parts[1])
+		switch visibility {
+		case "public", "private":
+			info.Visibility = visibility
+		default:
+			fmt.Printf("unknown optgen visibility '%s' on field %s\n", visibility, field.Names[0].Name)
+			os.Exit(1)
+		}
+	}
+
+	return info, true
 }
 
 // generateForFileAST generates functional options code for the given struct types.
@@ -391,6 +454,12 @@ func writeToOptionAST(buf *jen.File, st *ast.StructType, c Config) {
 			for _, field := range st.Fields.List {
 				for _, name := range field.Names {
 					if name.IsExported() {
+						// Check optgen tag
+						tagInfo, _ := parseOptgenTag(field)
+						if tagInfo.Action == OptgenSkip {
+							continue
+						}
+						// readonly fields ARE included here
 						retGrp.Id("to").Op(".").Id(name.Name).Op("=").Id(c.ReceiverId).Op(".").Id(name.Name)
 					}
 				}
@@ -553,40 +622,55 @@ func writeAllWithOptFuncsAST(buf *jen.File, st *ast.StructType, outdir string, c
 		}
 
 		for _, name := range field.Names {
-			if name.IsExported() {
-				fieldName := name.Name
+			fieldName := name.Name
+			isExported := name.IsExported()
 
-				// Try to convert AST type to jen.Code for better type safety
-				var fieldType jen.Code
-				if field.Type != nil {
-					fieldType = astTypeToJenCode(field.Type, resolver)
-				} else {
-					fieldType = jen.Interface()
-				}
+			// Check optgen tag
+			tagInfo, _ := parseOptgenTag(field)
 
-				// Generate appropriate methods based on field type
-				if field.Type != nil {
-					if isSliceOrArrayAST(field.Type) {
-						writeSliceWithOptAST(buf, fieldName, field.Type, c, resolver)
-						writeSliceSetOptAST(buf, fieldName, fieldType, c)
-					} else if isMapAST(field.Type) {
-						writeMapWithOptAST(buf, fieldName, field.Type, c, resolver)
-						writeMapSetOptAST(buf, fieldName, fieldType, c)
-					} else {
-						writeStandardWithOptAST(buf, fieldName, fieldType, c)
-					}
+			// Skip fields marked as skip or readonly
+			if tagInfo.Action == OptgenSkip || tagInfo.Action == OptgenReadonly {
+				continue
+			}
+
+			// Determine function visibility
+			makePublic := isExported // Default: match field visibility
+			if tagInfo.Visibility == "public" {
+				makePublic = true
+			} else if tagInfo.Visibility == "private" {
+				makePublic = false
+			}
+
+			// Try to convert AST type to jen.Code for better type safety
+			var fieldType jen.Code
+			if field.Type != nil {
+				fieldType = astTypeToJenCode(field.Type, resolver)
+			} else {
+				fieldType = jen.Interface()
+			}
+
+			// Generate appropriate methods based on field type
+			if field.Type != nil {
+				if isSliceOrArrayAST(field.Type) {
+					writeSliceWithOptAST(buf, fieldName, field.Type, c, resolver, makePublic)
+					writeSliceSetOptAST(buf, fieldName, fieldType, c, makePublic)
+				} else if isMapAST(field.Type) {
+					writeMapWithOptAST(buf, fieldName, field.Type, c, resolver, makePublic)
+					writeMapSetOptAST(buf, fieldName, fieldType, c, makePublic)
 				} else {
-					writeStandardWithOptAST(buf, fieldName, fieldType, c)
+					writeStandardWithOptAST(buf, fieldName, fieldType, c, makePublic)
 				}
+			} else {
+				writeStandardWithOptAST(buf, fieldName, fieldType, c, makePublic)
 			}
 		}
 	}
 }
 
 // writeSliceWithOptAST generates a With* method for slice fields using AST (appends)
-func writeSliceWithOptAST(buf *jen.File, fieldName string, fieldTypeAST ast.Expr, c Config, resolver *ImportResolver) {
-	fieldFuncName := fmt.Sprintf("With%s%s", c.prefix(), toTitle(fieldName))
-	buf.Comment(fmt.Sprintf("%s returns an option that can append %ss to %s.%s", fieldFuncName, toTitle(fieldName), c.StructName, fieldName))
+func writeSliceWithOptAST(buf *jen.File, fieldName string, fieldTypeAST ast.Expr, c Config, resolver *ImportResolver, makePublic bool) {
+	fieldFuncName := formatFunctionName("With", fieldName, c.prefix(), makePublic)
+	buf.Comment(fmt.Sprintf("%s returns an option that can append %ss to %s.%s", fieldFuncName, toTitle(fieldName), c.StructName, toTitle(fieldName)))
 
 	// Extract element type from slice/array AST
 	var elemType jen.Code
@@ -601,21 +685,21 @@ func writeSliceWithOptAST(buf *jen.File, fieldName string, fieldTypeAST ast.Expr
 	).Id(c.OptTypeName).BlockFunc(func(grp *jen.Group) {
 		grp.Return(
 			jen.Func().Params(jen.Id(c.ReceiverId).Op("*").Add(c.StructRef...)).BlockFunc(func(grp2 *jen.Group) {
-				grp2.Id(c.ReceiverId).Op(".").Id(fieldName).Op("=").Append(jen.Id(c.ReceiverId).Op(".").Id(fieldName), jen.Id(unexport(fieldName)))
+				grp2.Id(c.ReceiverId).Op(".").Id(toTitle(fieldName)).Op("=").Append(jen.Id(c.ReceiverId).Op(".").Id(toTitle(fieldName)), jen.Id(unexport(fieldName)))
 			}),
 		)
 	})
 }
 
 // writeSliceSetOptAST generates a Set* method for slice fields using AST (replaces)
-func writeSliceSetOptAST(buf *jen.File, fieldName string, fieldType jen.Code, c Config) {
-	writeSetterOptAST(buf, "Set", fieldName, fieldType, c)
+func writeSliceSetOptAST(buf *jen.File, fieldName string, fieldType jen.Code, c Config, makePublic bool) {
+	writeSetterOptAST(buf, "Set", fieldName, fieldType, c, makePublic)
 }
 
 // writeMapWithOptAST generates a With* method for map fields using AST (adds key-value)
-func writeMapWithOptAST(buf *jen.File, fieldName string, fieldTypeAST ast.Expr, c Config, resolver *ImportResolver) {
-	fieldFuncName := fmt.Sprintf("With%s%s", c.prefix(), toTitle(fieldName))
-	buf.Comment(fmt.Sprintf("%s returns an option that can append %ss to %s.%s", fieldFuncName, toTitle(fieldName), c.StructName, fieldName))
+func writeMapWithOptAST(buf *jen.File, fieldName string, fieldTypeAST ast.Expr, c Config, resolver *ImportResolver, makePublic bool) {
+	fieldFuncName := formatFunctionName("With", fieldName, c.prefix(), makePublic)
+	buf.Comment(fmt.Sprintf("%s returns an option that can append %ss to %s.%s", fieldFuncName, toTitle(fieldName), c.StructName, toTitle(fieldName)))
 
 	// Extract key and value types from map AST
 	var keyType, valueType jen.Code
@@ -633,25 +717,25 @@ func writeMapWithOptAST(buf *jen.File, fieldName string, fieldTypeAST ast.Expr, 
 	).Id(c.OptTypeName).BlockFunc(func(grp *jen.Group) {
 		grp.Return(
 			jen.Func().Params(jen.Id(c.ReceiverId).Op("*").Add(c.StructRef...)).BlockFunc(func(grp2 *jen.Group) {
-				grp2.Id(c.ReceiverId).Op(".").Id(fieldName).Index(jen.Id("key")).Op("=").Id("value")
+				grp2.Id(c.ReceiverId).Op(".").Id(toTitle(fieldName)).Index(jen.Id("key")).Op("=").Id("value")
 			}),
 		)
 	})
 }
 
 // writeMapSetOptAST generates a Set* method for map fields using AST (replaces)
-func writeMapSetOptAST(buf *jen.File, fieldName string, fieldType jen.Code, c Config) {
-	writeSetterOptAST(buf, "Set", fieldName, fieldType, c)
+func writeMapSetOptAST(buf *jen.File, fieldName string, fieldType jen.Code, c Config, makePublic bool) {
+	writeSetterOptAST(buf, "Set", fieldName, fieldType, c, makePublic)
 }
 
 // writeStandardWithOptAST generates a With* method for standard fields using AST
-func writeStandardWithOptAST(buf *jen.File, fieldName string, fieldType jen.Code, c Config) {
-	writeSetterOptAST(buf, "With", fieldName, fieldType, c)
+func writeStandardWithOptAST(buf *jen.File, fieldName string, fieldType jen.Code, c Config, makePublic bool) {
+	writeSetterOptAST(buf, "With", fieldName, fieldType, c, makePublic)
 }
 
 // writeSetterOptAST generates a setter option function (used by slice, map, and standard setters)
-func writeSetterOptAST(buf *jen.File, funcPrefix, fieldName string, fieldType jen.Code, c Config) {
-	fieldFuncName := fmt.Sprintf("%s%s%s", funcPrefix, c.prefix(), toTitle(fieldName))
+func writeSetterOptAST(buf *jen.File, funcPrefix, fieldName string, fieldType jen.Code, c Config, makePublic bool) {
+	fieldFuncName := formatFunctionName(funcPrefix, fieldName, c.prefix(), makePublic)
 	buf.Comment(fmt.Sprintf("%s returns an option that can set %s on a %s", fieldFuncName, toTitle(fieldName), c.StructName))
 
 	buf.Func().Id(fieldFuncName).Params(
@@ -659,7 +743,7 @@ func writeSetterOptAST(buf *jen.File, funcPrefix, fieldName string, fieldType je
 	).Id(c.OptTypeName).BlockFunc(func(grp *jen.Group) {
 		grp.Return(
 			jen.Func().Params(jen.Id(c.ReceiverId).Op("*").Add(c.StructRef...)).BlockFunc(func(grp2 *jen.Group) {
-				grp2.Id(c.ReceiverId).Op(".").Id(fieldName).Op("=").Id(unexport(fieldName))
+				grp2.Id(c.ReceiverId).Op(".").Id(toTitle(fieldName)).Op("=").Id(unexport(fieldName))
 			}),
 		)
 	})
@@ -918,4 +1002,13 @@ func toTitle(s string) string {
 	r := []rune(s)
 	r[0] = unicode.ToUpper(r[0])
 	return string(r)
+}
+
+// formatFunctionName returns properly cased function name based on visibility
+func formatFunctionName(prefix, fieldName, structPrefix string, makePublic bool) string {
+	name := fmt.Sprintf("%s%s%s", prefix, structPrefix, toTitle(fieldName))
+	if !makePublic {
+		name = unexport(name)
+	}
+	return name
 }
