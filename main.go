@@ -17,6 +17,10 @@
 //	    Name of package to use in output file (optional, inferred from output directory)
 //	-sensitive-field-name-matches <substring>
 //	    Comma-separated list of field name substrings considered sensitive (default: "secure")
+//	-prefix
+//	    Prefix generated function names with struct name (e.g., WithServerPort instead of WithPort)
+//	-flatten
+//	    Generate flattened accessor methods for nested struct fields
 //
 // Example:
 //
@@ -26,17 +30,42 @@
 //
 // Fields must be annotated with the `debugmap` struct tag:
 //   - "visible" - Show actual field value in DebugMap
-//   - "visible-format" - Show formatted value (expands collections)
+//   - "visible-format" - Show formatted value (expands collections, inlines nested structs)
 //   - "sensitive" - Show "(sensitive)" placeholder
 //   - "hidden" - Omit from DebugMap entirely
 //
+// Fields can optionally be annotated with the `optgen` struct tag:
+//   - "generate" - Generate With* functions (default for exported fields)
+//   - "skip" - Don't generate any functions
+//   - "readonly" - Only include in ToOption(), no With* functions
+//   - "generate,recursive" - For struct fields: generate both direct setter and options setter
+//   - "generate,flatten" - Generate flattened accessors for nested struct fields (unlimited depth)
+//   - "generate,flatten:N" - Flatten with depth limit N
+//   - "generate,flatten,prefix:Custom" - Use custom prefix for flattened names
+//   - "generate,public" / "generate,private" - Override visibility
+//
 // Example struct:
 //
-//	type Config struct {
-//	    Name     string `debugmap:"visible"`
-//	    Password string `debugmap:"sensitive"`
-//	    Data     []byte `debugmap:"hidden"`
+//	type ServerMetadata struct {
+//	    Name  string `optgen:"generate" debugmap:"visible"`
+//	    Owner string `optgen:"generate" debugmap:"visible"`
 //	}
+//
+//	type Config struct {
+//	    Name     string          `optgen:"generate" debugmap:"visible"`
+//	    Password string          `optgen:"generate" debugmap:"sensitive"`
+//	    Data     []byte          `optgen:"skip" debugmap:"hidden"`
+//	    Metadata ServerMetadata  `optgen:"generate,recursive" debugmap:"visible"`
+//	    Address  Address         `optgen:"generate,flatten:1" debugmap:"visible"`
+//	}
+//
+// Generated functions for the above Config:
+//   - WithName(name string) - standard setter
+//   - WithPassword(password string) - standard setter
+//   - WithMetadata(metadata ServerMetadata) - direct struct setter
+//   - WithMetadataOptions(opts ...ServerMetadataOption) - nested options setter (recursive)
+//   - WithAddress(address Address) - direct struct setter
+//   - WithAddressStreet(street string) - flattened accessor (depth 1)
 package main
 
 import (
@@ -50,6 +79,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -60,11 +90,6 @@ import (
 
 type WriterProvider func() io.Writer
 
-// TODO: struct tags to know what to generate
-// TODO: recursive generation, i.e. WithMetadata(WithName())
-// TODO: optional flattening of recursive generation, i.e. WithMetadataName()
-// TODO: configurable field prefix
-// TODO: exported / unexported generation
 
 var DefaultSensitiveNames = "secure"
 
@@ -90,13 +115,17 @@ func main() {
 		false,
 		"Prefix generated function names with struct name (e.g., WithServerPort instead of WithPort)",
 	)
+	flattenFlag := fs.Bool(
+		"flatten",
+		false,
+		"Generate flattened accessor methods for nested struct fields",
+	)
 
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		log.Fatal(err.Error())
 	}
 
 	if len(fs.Args()) < 2 {
-		// TODO: usage
 		log.Fatal("must specify a package directory and a struct to provide options for")
 	}
 
@@ -157,7 +186,7 @@ func main() {
 					continue
 				}
 				fmt.Printf("Generating options for %s.%s...\n", packageName, strings.Join(structNames, ", "))
-				err = generateForFileAST(f, structs, packageName, f.Name.Name, *outputPathFlag, sensitiveNameMatches, *prefixFlag, writer)
+				err = generateForFileAST(f, structs, packageName, f.Name.Name, *outputPathFlag, sensitiveNameMatches, *prefixFlag, *flattenFlag, writer)
 				if err != nil {
 					return err
 				}
@@ -213,6 +242,7 @@ type Config struct {
 	StructName     string
 	PkgPath        string
 	UsePrefix      bool
+	UseFlatten     bool
 }
 
 // prefix returns the struct name if UsePrefix is true, otherwise empty string
@@ -297,8 +327,12 @@ func parseStructTag(field *ast.Field, tagKey string) (string, error) {
 
 // OptgenTagInfo contains parsed optgen tag information
 type OptgenTagInfo struct {
-	Action     string // "generate", "skip", "readonly", "custom"
-	Visibility string // "public", "private", "default"
+	Action        string // "generate", "skip", "readonly"
+	Visibility    string // "public", "private", "default"
+	Recursive     bool   // true if "recursive" present
+	Flatten       bool   // true if "flatten" present
+	FlattenDepth  int    // 0 = unlimited, >0 = specific depth
+	FlattenPrefix string // custom prefix for flattened names, empty = use field name
 }
 
 // parseOptgenTag parses the optgen struct tag value.
@@ -321,11 +355,15 @@ func parseOptgenTag(field *ast.Field) (OptgenTagInfo, bool) {
 		return OptgenTagInfo{Action: action, Visibility: "default"}, false
 	}
 
-	// Parse comma-separated values: "generate,public"
+	// Parse comma-separated values: "generate,public,recursive,flatten:2,prefix:Custom"
 	parts := strings.Split(tagValue, ",")
 	info := OptgenTagInfo{
-		Action:     strings.TrimSpace(parts[0]),
-		Visibility: "default",
+		Action:        strings.TrimSpace(parts[0]),
+		Visibility:    "default",
+		Recursive:     false,
+		Flatten:       false,
+		FlattenDepth:  0,
+		FlattenPrefix: "",
 	}
 
 	// Validate action
@@ -337,15 +375,47 @@ func parseOptgenTag(field *ast.Field) (OptgenTagInfo, bool) {
 		os.Exit(1)
 	}
 
-	// Parse visibility if present
-	if len(parts) > 1 {
-		visibility := strings.TrimSpace(parts[1])
-		switch visibility {
-		case "public", "private":
-			info.Visibility = visibility
-		default:
-			fmt.Printf("unknown optgen visibility '%s' on field %s\n", visibility, field.Names[0].Name)
-			os.Exit(1)
+	// Parse additional options (visibility, recursive, flatten, etc.)
+	for i := 1; i < len(parts); i++ {
+		part := strings.TrimSpace(parts[i])
+
+		// Check for key:value options
+		if strings.Contains(part, ":") {
+			kv := strings.SplitN(part, ":", 2)
+			key := strings.TrimSpace(kv[0])
+			value := strings.TrimSpace(kv[1])
+
+			switch key {
+			case "flatten":
+				// Parse flatten depth: "flatten:2"
+				info.Flatten = true
+				depth, err := strconv.Atoi(value)
+				if err != nil || depth < 0 {
+					fmt.Printf("invalid flatten depth '%s' on field %s\n", value, field.Names[0].Name)
+					os.Exit(1)
+				}
+				info.FlattenDepth = depth
+			case "prefix":
+				// Parse custom prefix: "prefix:Custom"
+				info.FlattenPrefix = value
+			default:
+				fmt.Printf("unknown optgen option '%s' on field %s\n", key, field.Names[0].Name)
+				os.Exit(1)
+			}
+		} else {
+			// Simple flags
+			switch part {
+			case "public", "private":
+				info.Visibility = part
+			case "recursive":
+				info.Recursive = true
+			case "flatten":
+				info.Flatten = true
+				info.FlattenDepth = 0 // unlimited
+			default:
+				fmt.Printf("unknown optgen option '%s' on field %s\n", part, field.Names[0].Name)
+				os.Exit(1)
+			}
 		}
 	}
 
@@ -354,7 +424,7 @@ func parseOptgenTag(field *ast.Field) (OptgenTagInfo, bool) {
 
 // generateForFileAST generates functional options code for the given struct types.
 // It creates option types, constructor functions, and utility methods for each struct.
-func generateForFileAST(file *ast.File, typeSpecs []*ast.TypeSpec, pkgName, fileName, outpath string, sensitiveNameMatches []string, usePrefix bool, writer WriterProvider) error {
+func generateForFileAST(file *ast.File, typeSpecs []*ast.TypeSpec, pkgName, fileName, outpath string, sensitiveNameMatches []string, usePrefix, useFlatten bool, writer WriterProvider) error {
 	outdir, err := filepath.Abs(filepath.Dir(outpath))
 	if err != nil {
 		return err
@@ -381,6 +451,7 @@ func generateForFileAST(file *ast.File, typeSpecs []*ast.TypeSpec, pkgName, file
 			StructName:     structName,
 			PkgPath:        "", // Not needed for AST-based generation
 			UsePrefix:      usePrefix,
+			UseFlatten:     useFlatten,
 		}
 
 		// generate the Option type
@@ -396,14 +467,14 @@ func generateForFileAST(file *ast.File, typeSpecs []*ast.TypeSpec, pkgName, file
 		writeToOptionAST(buf, st, config)
 
 		// generate DebugMap
-		writeDebugMapAST(buf, st, config, sensitiveNameMatches)
+		writeDebugMapAST(buf, st, config, sensitiveNameMatches, resolver)
 
 		// generate WithOptions
 		writeXWithOptionsAST(buf, config)
 		writeWithOptionsAST(buf, config)
 
 		// generate all With* functions
-		writeAllWithOptFuncsAST(buf, st, outdir, config, resolver)
+		writeAllWithOptFuncsAST(buf, st, outdir, config, resolver, file)
 	}
 
 	w := writer()
@@ -468,7 +539,7 @@ func writeToOptionAST(buf *jen.File, st *ast.StructType, c Config) {
 	})
 }
 
-func writeDebugMapAST(buf *jen.File, st *ast.StructType, c Config, sensitiveNameMatches []string) {
+func writeDebugMapAST(buf *jen.File, st *ast.StructType, c Config, sensitiveNameMatches []string, resolver *ImportResolver) {
 	newFuncName := "DebugMap"
 
 	buf.Comment(fmt.Sprintf("%s returns a map form of %s for debugging", newFuncName, c.TargetTypeName))
@@ -488,7 +559,7 @@ func writeDebugMapAST(buf *jen.File, st *ast.StructType, c Config, sensitiveName
 					continue
 				}
 
-				processDebugMapField(grp, field, name.Name, c, sensitiveNameMatches, mapId)
+				processDebugMapField(grp, field, name.Name, c, sensitiveNameMatches, mapId, resolver)
 			}
 		}
 
@@ -531,7 +602,7 @@ func writeFlatDebugMapAST(buf *jen.File, c Config) {
 }
 
 // processDebugMapField processes a single field for debug map generation
-func processDebugMapField(grp *jen.Group, field *ast.Field, fieldName string, c Config, sensitiveNameMatches []string, mapId string) {
+func processDebugMapField(grp *jen.Group, field *ast.Field, fieldName string, c Config, sensitiveNameMatches []string, mapId string, resolver *ImportResolver) {
 	// Parse the debugmap tag
 	tagValue, err := parseStructTag(field, DebugMapFieldTag)
 	if err != nil {
@@ -542,11 +613,11 @@ func processDebugMapField(grp *jen.Group, field *ast.Field, fieldName string, c 
 	switch tagValue {
 	case "visible":
 		validateNotSensitive(fieldName, c.TargetTypeName, sensitiveNameMatches)
-		generateDebugCodeByCategory(grp, field.Type, c.ReceiverId, fieldName, mapId, false)
+		generateDebugCodeByCategory(grp, field.Type, c.ReceiverId, fieldName, mapId, false, resolver)
 
 	case "visible-format":
 		validateNotSensitive(fieldName, c.TargetTypeName, sensitiveNameMatches)
-		generateDebugCodeByCategory(grp, field.Type, c.ReceiverId, fieldName, mapId, true)
+		generateDebugCodeByCategory(grp, field.Type, c.ReceiverId, fieldName, mapId, true, resolver)
 
 	case "hidden":
 		// Skip this field entirely
@@ -573,8 +644,31 @@ func validateNotSensitive(fieldName, typeName string, sensitiveNameMatches []str
 }
 
 // generateDebugCodeByCategory generates debug code based on type category
-func generateDebugCodeByCategory(grp *jen.Group, fieldType ast.Expr, receiverId, fieldName, mapId string, useFormat bool) {
+func generateDebugCodeByCategory(grp *jen.Group, fieldType ast.Expr, receiverId, fieldName, mapId string, useFormat bool, resolver *ImportResolver) {
 	category := getTypeCategory(fieldType)
+
+	// Check if it's a struct type
+	isStruct, pkgPath := isStructTypeAST(fieldType, resolver)
+	if isStruct {
+		if pkgPath == "" {
+			// Same-package struct - call DebugMap() method
+			if useFormat {
+				// For visible-format, inline the nested fields with dot notation
+				generateDebugCodeForStructFormat(grp, receiverId, fieldName, mapId)
+			} else {
+				// For visible, call DebugMap() recursively
+				generateDebugCodeForStruct(grp, receiverId, fieldName, mapId)
+			}
+		} else {
+			// Cross-package struct - just use fmt.Sprintf
+			grp.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Qual("fmt", "Sprintf").Call(
+				jen.Lit("%v"),
+				jen.Id(receiverId).Dot(fieldName),
+			)
+		}
+		return
+	}
+
 	switch category {
 	case typeCategoryPrimitive:
 		generateDebugCodeForPrimitive(grp, receiverId, fieldName, fieldType, mapId)
@@ -614,7 +708,7 @@ func writeWithOptionsAST(buf *jen.File, c Config) {
 		BlockFunc(applyOptions(c.ReceiverId))
 }
 
-func writeAllWithOptFuncsAST(buf *jen.File, st *ast.StructType, outdir string, c Config, resolver *ImportResolver) {
+func writeAllWithOptFuncsAST(buf *jen.File, st *ast.StructType, outdir string, c Config, resolver *ImportResolver, file *ast.File) {
 	for _, field := range st.Fields.List {
 		if field.Names == nil {
 			// Anonymous field, skip
@@ -651,7 +745,27 @@ func writeAllWithOptFuncsAST(buf *jen.File, st *ast.StructType, outdir string, c
 
 			// Generate appropriate methods based on field type
 			if field.Type != nil {
-				if isSliceOrArrayAST(field.Type) {
+				// Check if it's a struct type
+				isStruct, pkgPath := isStructTypeAST(field.Type, resolver)
+				if isStruct && pkgPath == "" {
+					// Same-package struct type
+					writeStructDirectSetterAST(buf, fieldName, fieldType, c, makePublic)
+
+					// Generate recursive options setter if requested
+					if tagInfo.Recursive {
+						writeStructRecursiveSetterAST(buf, fieldName, field.Type, c, resolver, makePublic)
+					}
+
+					// Generate flattened accessors if requested (via tag or global flag)
+					if tagInfo.Flatten || c.UseFlatten {
+						flattenDepth := tagInfo.FlattenDepth
+						flattenPrefix := tagInfo.FlattenPrefix
+						if flattenPrefix == "" {
+							flattenPrefix = fieldName
+						}
+						writeFlattenedOptFuncsAST(buf, fieldName, field.Type, file, c, resolver, flattenPrefix, 1, flattenDepth, makePublic)
+					}
+				} else if isSliceOrArrayAST(field.Type) {
 					writeSliceWithOptAST(buf, fieldName, field.Type, c, resolver, makePublic)
 					writeSliceSetOptAST(buf, fieldName, fieldType, c, makePublic)
 				} else if isMapAST(field.Type) {
@@ -731,6 +845,113 @@ func writeMapSetOptAST(buf *jen.File, fieldName string, fieldType jen.Code, c Co
 // writeStandardWithOptAST generates a With* method for standard fields using AST
 func writeStandardWithOptAST(buf *jen.File, fieldName string, fieldType jen.Code, c Config, makePublic bool) {
 	writeSetterOptAST(buf, "With", fieldName, fieldType, c, makePublic)
+}
+
+// writeStructDirectSetterAST generates a With* method for struct fields (direct assignment)
+func writeStructDirectSetterAST(buf *jen.File, fieldName string, fieldType jen.Code, c Config, makePublic bool) {
+	writeSetterOptAST(buf, "With", fieldName, fieldType, c, makePublic)
+}
+
+// writeStructRecursiveSetterAST generates a WithFieldOptions method for struct fields (nested options)
+func writeStructRecursiveSetterAST(buf *jen.File, fieldName string, fieldTypeAST ast.Expr, c Config, resolver *ImportResolver, makePublic bool) {
+	// Get the struct type name
+	typeName := getStructTypeName(fieldTypeAST)
+	if typeName == "" {
+		return // Can't generate without a type name
+	}
+
+	// Generate function name: WithMetadataOptions
+	fieldFuncName := formatFunctionName("With", fieldName+"Options", c.prefix(), makePublic)
+	optTypeName := fmt.Sprintf("%sOption", typeName)
+
+	buf.Comment(fmt.Sprintf("%s returns an option that can set %s on a %s using nested options", fieldFuncName, toTitle(fieldName), c.StructName))
+	buf.Func().Id(fieldFuncName).Params(
+		jen.Id("opts").Op("...").Id(optTypeName),
+	).Id(c.OptTypeName).BlockFunc(func(grp *jen.Group) {
+		grp.Return(
+			jen.Func().Params(jen.Id(c.ReceiverId).Op("*").Add(c.StructRef...)).BlockFunc(func(grp2 *jen.Group) {
+				// Call New{Type}WithOptions(opts...)
+				constructorName := fmt.Sprintf("New%sWithOptions", typeName)
+				grp2.Id(c.ReceiverId).Op(".").Id(toTitle(fieldName)).Op("=").Op("*").Id(constructorName).Call(jen.Id("opts").Op("..."))
+			}),
+		)
+	})
+}
+
+// writeFlattenedOptFuncsAST generates flattened accessor methods for nested struct fields
+func writeFlattenedOptFuncsAST(buf *jen.File, parentFieldName string, fieldTypeAST ast.Expr, file *ast.File, c Config, resolver *ImportResolver, prefix string, currentDepth, maxDepth int, makePublic bool) {
+	// Check depth limit
+	if maxDepth > 0 && currentDepth > maxDepth {
+		return
+	}
+
+	// Get the struct type name and look it up
+	typeName := getStructTypeName(fieldTypeAST)
+	if typeName == "" {
+		return
+	}
+
+	nestedStruct := findStructDefInFile(file, typeName)
+	if nestedStruct == nil {
+		return // Struct not found in file
+	}
+
+	// Generate flattened accessors for each field in the nested struct
+	for _, nestedField := range nestedStruct.Fields.List {
+		if nestedField.Names == nil {
+			continue
+		}
+
+		for _, nestedName := range nestedField.Names {
+			nestedFieldName := nestedName.Name
+
+			// Skip unexported fields
+			if !nestedName.IsExported() {
+				continue
+			}
+
+			// Check optgen tag
+			nestedTagInfo, _ := parseOptgenTag(nestedField)
+			if nestedTagInfo.Action == OptgenSkip || nestedTagInfo.Action == OptgenReadonly {
+				continue
+			}
+
+			// Generate function name with prefix: WithMetadataName
+			flatFieldName := toTitle(prefix) + toTitle(nestedFieldName)
+			fieldFuncName := formatFunctionName("With", flatFieldName, c.prefix(), makePublic)
+
+			// Convert nested field type to jen.Code
+			var nestedFieldType jen.Code
+			if nestedField.Type != nil {
+				nestedFieldType = astTypeToJenCode(nestedField.Type, resolver)
+			} else {
+				nestedFieldType = jen.Interface()
+			}
+
+			// Generate the setter function
+			buf.Comment(fmt.Sprintf("%s returns an option that can set %s.%s on a %s", fieldFuncName, toTitle(parentFieldName), toTitle(nestedFieldName), c.StructName))
+			buf.Func().Id(fieldFuncName).Params(
+				jen.Id(unexport(nestedFieldName)).Add(nestedFieldType),
+			).Id(c.OptTypeName).BlockFunc(func(grp *jen.Group) {
+				grp.Return(
+					jen.Func().Params(jen.Id(c.ReceiverId).Op("*").Add(c.StructRef...)).BlockFunc(func(grp2 *jen.Group) {
+						grp2.Id(c.ReceiverId).Op(".").Id(toTitle(parentFieldName)).Op(".").Id(toTitle(nestedFieldName)).Op("=").Id(unexport(nestedFieldName))
+					}),
+				)
+			})
+
+			// Recursively flatten if this nested field is also a struct
+			if nestedField.Type != nil {
+				isNestedStruct, nestedPkgPath := isStructTypeAST(nestedField.Type, resolver)
+				if isNestedStruct && nestedPkgPath == "" {
+					// Recursively flatten this nested struct
+					newPrefix := toTitle(prefix) + toTitle(nestedFieldName)
+					newParentPath := parentFieldName + "." + nestedFieldName
+					writeFlattenedOptFuncsAST(buf, newParentPath, nestedField.Type, file, c, resolver, newPrefix, currentDepth+1, maxDepth, makePublic)
+				}
+			}
+		}
+	}
 }
 
 // writeSetterOptAST generates a setter option function (used by slice, map, and standard setters)
@@ -839,6 +1060,130 @@ func getTypeCategory(expr ast.Expr) string {
 		return typeCategoryMap
 	default:
 		return "complex"
+	}
+}
+
+// isSamePackageStruct checks if an AST expression is a same-package struct type (not cross-package).
+// Returns true for simple identifiers (like "ServerMetadata"), false for selectors (like "time.Time").
+func isSamePackageStruct(expr ast.Expr) bool {
+	// Unwrap pointer types
+	if starExpr, ok := expr.(*ast.StarExpr); ok {
+		expr = starExpr.X
+	}
+
+	// Check if it's a simple identifier (same package) or selector (cross-package)
+	switch t := expr.(type) {
+	case *ast.Ident:
+		// Simple identifier - could be a struct type in the same package
+		// We can't definitively know if it's a struct without looking it up,
+		// but we return true to indicate it's a same-package type
+		switch t.Name {
+		case "string", "int", "int8", "int16", "int32", "int64",
+			"uint", "uint8", "uint16", "uint32", "uint64", "uintptr",
+			"bool", "float32", "float64", "complex64", "complex128",
+			"byte", "rune", "error", "any":
+			// Built-in types - not structs
+			return false
+		default:
+			// Could be a struct type
+			return true
+		}
+	case *ast.SelectorExpr:
+		// Cross-package type (e.g., time.Time)
+		return false
+	case *ast.IndexExpr, *ast.IndexListExpr:
+		// Generic type - not a simple struct
+		return false
+	default:
+		return false
+	}
+}
+
+// isStructTypeAST checks if an AST expression represents a struct type.
+// Returns (isStruct, packagePath) where:
+//   - isStruct is true if the type could be a struct
+//   - packagePath is empty for same-package types, non-empty for cross-package (e.g., "time")
+func isStructTypeAST(expr ast.Expr, resolver *ImportResolver) (bool, string) {
+	// Unwrap pointer types
+	if starExpr, ok := expr.(*ast.StarExpr); ok {
+		expr = starExpr.X
+	}
+
+	switch t := expr.(type) {
+	case *ast.Ident:
+		// Simple identifier - check if it's a built-in type
+		switch t.Name {
+		case "string", "int", "int8", "int16", "int32", "int64",
+			"uint", "uint8", "uint16", "uint32", "uint64", "uintptr",
+			"bool", "float32", "float64", "complex64", "complex128",
+			"byte", "rune", "error", "any":
+			// Built-in types - not structs
+			return false, ""
+		default:
+			// Could be a same-package struct type
+			return true, ""
+		}
+	case *ast.SelectorExpr:
+		// Cross-package type (e.g., time.Time, sql.NullString)
+		if pkg, ok := t.X.(*ast.Ident); ok {
+			importPath := resolver.Resolve(pkg.Name)
+			return true, importPath
+		}
+		return false, ""
+	case *ast.IndexExpr, *ast.IndexListExpr:
+		// Generic type - not a simple struct for our purposes
+		return false, ""
+	default:
+		return false, ""
+	}
+}
+
+// findStructDefInFile searches for a struct type definition by name in an AST file.
+// Returns the struct type if found, nil otherwise.
+func findStructDefInFile(file *ast.File, typeName string) *ast.StructType {
+	var result *ast.StructType
+
+	ast.Inspect(file, func(node ast.Node) bool {
+		if result != nil {
+			return false // Already found, stop searching
+		}
+
+		ts, ok := node.(*ast.TypeSpec)
+		if !ok {
+			return true
+		}
+
+		if ts.Name == nil || ts.Name.Name != typeName {
+			return true
+		}
+
+		// Check if it's a struct type
+		if st, isStruct := ts.Type.(*ast.StructType); isStruct {
+			result = st
+			return false
+		}
+
+		return true
+	})
+
+	return result
+}
+
+// getStructTypeName extracts the type name from an AST expression.
+// Returns the type name (e.g., "ServerMetadata" from *ast.Ident, or "Time" from time.Time selector)
+func getStructTypeName(expr ast.Expr) string {
+	// Unwrap pointer types
+	if starExpr, ok := expr.(*ast.StarExpr); ok {
+		expr = starExpr.X
+	}
+
+	switch t := expr.(type) {
+	case *ast.Ident:
+		return t.Name
+	case *ast.SelectorExpr:
+		return t.Sel.Name
+	default:
+		return ""
 	}
 }
 
@@ -974,6 +1319,26 @@ func generateDebugCodeForSensitive(grp *jen.Group, receiverId, fieldName string,
 		// Other types: just mark as sensitive
 		grp.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Lit("(sensitive)")
 	}
+}
+
+// generateDebugCodeForStruct generates code for same-package struct fields (calls DebugMap)
+func generateDebugCodeForStruct(grp *jen.Group, receiverId, fieldName, mapId string) {
+	fieldAccess := jen.Id(receiverId).Dot(fieldName)
+
+	// Call the DebugMap() method on the nested struct
+	grp.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Add(fieldAccess).Dot("DebugMap").Call()
+}
+
+// generateDebugCodeForStructFormat generates code for struct fields with inline flattening
+func generateDebugCodeForStructFormat(grp *jen.Group, receiverId, fieldName, mapId string) {
+	fieldAccess := jen.Id(receiverId).Dot(fieldName)
+
+	// Call FlatDebugMap() on the nested struct and merge keys with dot notation
+	nestedMapVar := "nested" + toTitle(fieldName)
+	grp.Id(nestedMapVar).Op(":=").Add(fieldAccess).Dot("FlatDebugMap").Call()
+	grp.For(jen.List(jen.Id("k"), jen.Id("v")).Op(":=").Range().Id(nestedMapVar)).Block(
+		jen.Id(mapId).Index(jen.Lit(fieldName).Op("+").Lit(".").Op("+").Id("k")).Op("=").Id("v"),
+	)
 }
 
 func applyOptions(receiverId string) func(grp *jen.Group) {
