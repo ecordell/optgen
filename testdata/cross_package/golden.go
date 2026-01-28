@@ -2,6 +2,7 @@
 package testdata
 
 import (
+	"fmt"
 	defaults "github.com/creasty/defaults"
 	"time"
 )
@@ -44,8 +45,8 @@ func (c *CrossPackage) DebugMap() map[string]any {
 	} else {
 		debugMap["Name"] = c.Name
 	}
-	debugMap["Timestamp"] = c.Timestamp
-	debugMap["Duration"] = c.Duration
+	debugMap["Timestamp"] = fmt.Sprintf("%v", c.Timestamp)
+	debugMap["Duration"] = fmt.Sprintf("%v", c.Duration)
 	return debugMap
 }
 
