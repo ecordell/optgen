@@ -43,9 +43,27 @@ func (g *GenericConfig) ToOption() GenericConfigOption {
 // DebugMap returns a map form of GenericConfig for debugging
 func (g *GenericConfig) DebugMap() map[string]any {
 	debugMap := map[string]any{}
-	debugMap["StringContainer"] = g.StringContainer
-	debugMap["IntContainer"] = g.IntContainer
-	debugMap["StringIntPair"] = g.StringIntPair
+	if dm, ok := interface{}(g.StringContainer).(interface {
+		DebugMap() map[string]any
+	}); ok {
+		debugMap["StringContainer"] = dm.DebugMap()
+	} else {
+		debugMap["StringContainer"] = fmt.Sprintf("%+v", g.StringContainer)
+	}
+	if dm, ok := interface{}(g.IntContainer).(interface {
+		DebugMap() map[string]any
+	}); ok {
+		debugMap["IntContainer"] = dm.DebugMap()
+	} else {
+		debugMap["IntContainer"] = fmt.Sprintf("%+v", g.IntContainer)
+	}
+	if dm, ok := interface{}(g.StringIntPair).(interface {
+		DebugMap() map[string]any
+	}); ok {
+		debugMap["StringIntPair"] = dm.DebugMap()
+	} else {
+		debugMap["StringIntPair"] = fmt.Sprintf("%+v", g.StringIntPair)
+	}
 	if g.Containers == nil {
 		debugMap["Containers"] = "nil"
 	} else {

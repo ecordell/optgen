@@ -3,6 +3,7 @@ package testdata
 
 import (
 	"database/sql"
+	"fmt"
 	defaults "github.com/creasty/defaults"
 )
 
@@ -40,7 +41,13 @@ func (d *DatabaseConfig) ToOption() DatabaseConfigOption {
 func (d *DatabaseConfig) DebugMap() map[string]any {
 	debugMap := map[string]any{}
 	debugMap["ConnectionString"] = "(sensitive)"
-	debugMap["MaxConnections"] = d.MaxConnections
+	if dm, ok := interface{}(d.MaxConnections).(interface {
+		DebugMap() map[string]any
+	}); ok {
+		debugMap["MaxConnections"] = dm.DebugMap()
+	} else {
+		debugMap["MaxConnections"] = fmt.Sprintf("%+v", d.MaxConnections)
+	}
 	debugMap["Enabled"] = d.Enabled
 	return debugMap
 }

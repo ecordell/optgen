@@ -231,6 +231,8 @@ const (
 	typeCategoryPointer   = "pointer"
 	typeCategorySlice     = "slice"
 	typeCategoryMap       = "map"
+	typeCategoryFunc      = "func"
+	typeCategoryInterface = "interface"
 )
 
 // ImportResolver maps package names to their full import paths
@@ -523,9 +525,12 @@ func generateDebugCodeByCategory(grp *jen.Group, fieldType ast.Expr, receiverId,
 		} else {
 			generateDebugCodeForMapSize(grp, receiverId, fieldName, mapId)
 		}
+	case typeCategoryFunc, typeCategoryInterface:
+		generateDebugCodeForInterface(grp, receiverId, fieldName, mapId)
 	default:
-		// Complex types: direct assignment
-		grp.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Id(receiverId).Dot(fieldName)
+		// Complex types (structs, named types, generics): check for DebugMap() method,
+		// fall back to fmt.Sprintf("%+v") which includes struct field names
+		generateDebugCodeForComplex(grp, receiverId, fieldName, mapId)
 	}
 }
 
@@ -753,6 +758,10 @@ func getTypeCategory(expr ast.Expr) string {
 		return "array"
 	case *ast.MapType:
 		return typeCategoryMap
+	case *ast.FuncType:
+		return typeCategoryFunc
+	case *ast.InterfaceType:
+		return typeCategoryInterface
 	default:
 		return "complex"
 	}
@@ -890,6 +899,52 @@ func generateDebugCodeForSensitive(grp *jen.Group, receiverId, fieldName string,
 		// Other types: just mark as sensitive
 		grp.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Lit("(sensitive)")
 	}
+}
+
+// generateDebugCodeForInterface generates code for interface types - shows type name
+func generateDebugCodeForInterface(grp *jen.Group, receiverId, fieldName, mapId string) {
+	fieldAccess := jen.Id(receiverId).Dot(fieldName)
+
+	grp.If(jen.Add(fieldAccess).Op("==").Nil()).Block(
+		jen.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Lit("nil"),
+	).Else().Block(
+		jen.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Qual("fmt", "Sprintf").Call(
+			jen.Lit("%T"),
+			fieldAccess,
+		),
+	)
+}
+
+// generateDebugCodeForComplex generates code for complex types (structs, named types, generics).
+// It checks if the value implements DebugMap() at runtime to enable proper flattening,
+// and falls back to fmt.Sprintf("%+v") which includes struct field names.
+func generateDebugCodeForComplex(grp *jen.Group, receiverId, fieldName, mapId string) {
+	fieldAccess := jen.Id(receiverId).Dot(fieldName)
+
+	// type debugMapper interface { DebugMap() map[string]any }
+	debugMapperType := jen.Interface(jen.Id("DebugMap").Params().Map(jen.String()).Any())
+
+	// if dm, ok := interface{}(field).(debugMapper); ok { map[field] = dm.DebugMap() } else { map[field] = fmt.Sprintf("%+v", field) }
+	// Check for DebugMap() method first, then check for func/interface types that should show %T,
+	// then fall back to %+v for structs (which includes field names)
+	grp.If(
+		jen.List(jen.Id("dm"), jen.Id("ok")).Op(":=").Interface().Parens(fieldAccess).Assert(debugMapperType),
+		jen.Id("ok"),
+	).Block(
+		jen.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Id("dm").Dot("DebugMap").Call(),
+	).Else().If(
+		jen.Qual("reflect", "ValueOf").Call(jen.Interface().Parens(fieldAccess)).Dot("Kind").Call().Op("==").Qual("reflect", "Func"),
+	).Block(
+		jen.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Qual("fmt", "Sprintf").Call(
+			jen.Lit("%T"),
+			fieldAccess,
+		),
+	).Else().Block(
+		jen.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Qual("fmt", "Sprintf").Call(
+			jen.Lit("%+v"),
+			fieldAccess,
+		),
+	)
 }
 
 func applyOptions(receiverId string) func(grp *jen.Group) {

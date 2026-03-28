@@ -34,6 +34,7 @@ func TestGoldenFiles(t *testing.T) {
 		{"cross package types", "testdata/cross_package", "CrossPackage"},
 		{"database/sql types", "testdata/database_sql", "DatabaseConfig"},
 		{"generic types", "testdata/generics", "GenericConfig"},
+		{"complex types", "testdata/complex_types", "ComplexConfig"},
 	}
 
 	for _, tt := range tests {

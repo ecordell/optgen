@@ -14,13 +14,13 @@ type Test mg.Namespace
 // Unit runs all unit tests
 func (Test) Unit() error {
 	fmt.Println("Running unit tests...")
-	return sh.RunV("go", "test", "-v", "./...")
+	return sh.RunV("go", "test", "-race", "-v", "./...")
 }
 
 // Coverage runs tests with coverage report
 func (Test) Coverage() error {
 	fmt.Println("Running tests with coverage...")
-	if err := sh.RunV("go", "test", "-coverprofile=coverage.out", "./..."); err != nil {
+	if err := sh.RunV("go", "test", "-race", "-coverprofile=coverage.out", "./..."); err != nil {
 		return err
 	}
 	return sh.RunV("go", "tool", "cover", "-html=coverage.out", "-o", "coverage.html")
