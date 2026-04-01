@@ -52,6 +52,10 @@ func (c *Config) DebugMap() map[string]any {
 	debugMap["Enabled"] = c.Enabled
 	if c.Timeout == nil {
 		debugMap["Timeout"] = "nil"
+	} else if dm, ok := any(c.Timeout).(interface {
+		DebugMap() map[string]any
+	}); ok {
+		debugMap["Timeout"] = dm.DebugMap()
 	} else {
 		debugMap["Timeout"] = *c.Timeout
 	}

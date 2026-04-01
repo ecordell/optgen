@@ -41,11 +41,21 @@ func (o *OuterConfig) DebugMap() map[string]any {
 	} else {
 		debugMap["Name"] = o.Name
 	}
-	debugMap["Nested"] = o.Nested.DebugMap()
+	if dm, ok := any(o.Nested).(interface {
+		DebugMap() map[string]any
+	}); ok {
+		debugMap["Nested"] = dm.DebugMap()
+	} else {
+		debugMap["Nested"] = o.Nested
+	}
 	if o.NestedPtr == nil {
 		debugMap["NestedPtr"] = "nil"
+	} else if dm, ok := any(o.NestedPtr).(interface {
+		DebugMap() map[string]any
+	}); ok {
+		debugMap["NestedPtr"] = dm.DebugMap()
 	} else {
-		debugMap["NestedPtr"] = o.NestedPtr.DebugMap()
+		debugMap["NestedPtr"] = *o.NestedPtr
 	}
 	return debugMap
 }
