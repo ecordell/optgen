@@ -41,7 +41,7 @@ func (o *OuterConfig) DebugMap() map[string]any {
 	} else {
 		debugMap["Name"] = o.Name
 	}
-	if dm, ok := any(o.Nested).(interface {
+	if dm, ok := any(&o.Nested).(interface {
 		DebugMap() map[string]any
 	}); ok {
 		debugMap["Nested"] = dm.DebugMap()

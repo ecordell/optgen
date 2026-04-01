@@ -526,8 +526,9 @@ func generateDebugCodeByCategory(grp *jen.Group, fieldType ast.Expr, receiverId,
 	default:
 		// Complex types: runtime interface check for DebugMap() — works for same-package,
 		// cross-package, and external types uniformly.
+		// Use pointer to cover both value-receiver and pointer-receiver DebugMap() methods.
 		grp.If(
-			jen.List(jen.Id("dm"), jen.Id("ok")).Op(":=").Id("any").Call(jen.Id(receiverId).Dot(fieldName)).Assert(
+			jen.List(jen.Id("dm"), jen.Id("ok")).Op(":=").Id("any").Call(jen.Op("&").Id(receiverId).Dot(fieldName)).Assert(
 				jen.Interface(jen.Id("DebugMap").Params().Map(jen.String()).Any()),
 			),
 			jen.Id("ok"),
