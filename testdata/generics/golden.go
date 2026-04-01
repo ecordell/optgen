@@ -43,9 +43,27 @@ func (g *GenericConfig) ToOption() GenericConfigOption {
 // DebugMap returns a map form of GenericConfig for debugging
 func (g *GenericConfig) DebugMap() map[string]any {
 	debugMap := map[string]any{}
-	debugMap["StringContainer"] = g.StringContainer
-	debugMap["IntContainer"] = g.IntContainer
-	debugMap["StringIntPair"] = g.StringIntPair
+	if dm, ok := any(g.StringContainer).(interface {
+		DebugMap() map[string]any
+	}); ok {
+		debugMap["StringContainer"] = dm.DebugMap()
+	} else {
+		debugMap["StringContainer"] = g.StringContainer
+	}
+	if dm, ok := any(g.IntContainer).(interface {
+		DebugMap() map[string]any
+	}); ok {
+		debugMap["IntContainer"] = dm.DebugMap()
+	} else {
+		debugMap["IntContainer"] = g.IntContainer
+	}
+	if dm, ok := any(g.StringIntPair).(interface {
+		DebugMap() map[string]any
+	}); ok {
+		debugMap["StringIntPair"] = dm.DebugMap()
+	} else {
+		debugMap["StringIntPair"] = g.StringIntPair
+	}
 	if g.Containers == nil {
 		debugMap["Containers"] = "nil"
 	} else {
@@ -58,6 +76,10 @@ func (g *GenericConfig) DebugMap() map[string]any {
 	}
 	if g.OptionalContainer == nil {
 		debugMap["OptionalContainer"] = "nil"
+	} else if dm, ok := any(g.OptionalContainer).(interface {
+		DebugMap() map[string]any
+	}); ok {
+		debugMap["OptionalContainer"] = dm.DebugMap()
 	} else {
 		debugMap["OptionalContainer"] = *g.OptionalContainer
 	}
