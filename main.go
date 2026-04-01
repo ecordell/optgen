@@ -151,13 +151,17 @@ func main() {
 
 		count := 0
 		for _, pkg := range pkgs {
+			pkgFiles := make([]*ast.File, 0, len(pkg.Files))
+			for _, f := range pkg.Files {
+				pkgFiles = append(pkgFiles, f)
+			}
 			for _, f := range pkg.Files {
 				structs := findStructDefsAST(f, structFilter)
 				if len(structs) == 0 {
 					continue
 				}
 				fmt.Printf("Generating options for %s.%s...\n", packageName, strings.Join(structNames, ", "))
-				err = generateForFileAST(f, structs, packageName, f.Name.Name, *outputPathFlag, sensitiveNameMatches, *prefixFlag, writer)
+				err = generateForFileAST(f, structs, packageName, f.Name.Name, *outputPathFlag, sensitiveNameMatches, *prefixFlag, writer, pkgFiles)
 				if err != nil {
 					return err
 				}
@@ -291,7 +295,7 @@ func parseStructTag(field *ast.Field, tagKey string) (string, error) {
 
 // generateForFileAST generates functional options code for the given struct types.
 // It creates option types, constructor functions, and utility methods for each struct.
-func generateForFileAST(file *ast.File, typeSpecs []*ast.TypeSpec, pkgName, fileName, outpath string, sensitiveNameMatches []string, usePrefix bool, writer WriterProvider) error {
+func generateForFileAST(file *ast.File, typeSpecs []*ast.TypeSpec, pkgName, fileName, outpath string, sensitiveNameMatches []string, usePrefix bool, writer WriterProvider, pkgFiles []*ast.File) error {
 	outdir, err := filepath.Abs(filepath.Dir(outpath))
 	if err != nil {
 		return err
@@ -333,7 +337,7 @@ func generateForFileAST(file *ast.File, typeSpecs []*ast.TypeSpec, pkgName, file
 		writeToOptionAST(buf, st, config)
 
 		// generate DebugMap
-		writeDebugMapAST(buf, st, config, sensitiveNameMatches)
+		writeDebugMapAST(buf, st, config, sensitiveNameMatches, pkgFiles)
 
 		// generate WithOptions
 		writeXWithOptionsAST(buf, config)
@@ -399,7 +403,7 @@ func writeToOptionAST(buf *jen.File, st *ast.StructType, c Config) {
 	})
 }
 
-func writeDebugMapAST(buf *jen.File, st *ast.StructType, c Config, sensitiveNameMatches []string) {
+func writeDebugMapAST(buf *jen.File, st *ast.StructType, c Config, sensitiveNameMatches []string, pkgFiles []*ast.File) {
 	newFuncName := "DebugMap"
 
 	buf.Comment(fmt.Sprintf("%s returns a map form of %s for debugging", newFuncName, c.TargetTypeName))
@@ -419,7 +423,7 @@ func writeDebugMapAST(buf *jen.File, st *ast.StructType, c Config, sensitiveName
 					continue
 				}
 
-				processDebugMapField(grp, field, name.Name, c, sensitiveNameMatches, mapId)
+				processDebugMapField(grp, field, name.Name, c, sensitiveNameMatches, mapId, pkgFiles)
 			}
 		}
 
@@ -462,7 +466,7 @@ func writeFlatDebugMapAST(buf *jen.File, c Config) {
 }
 
 // processDebugMapField processes a single field for debug map generation
-func processDebugMapField(grp *jen.Group, field *ast.Field, fieldName string, c Config, sensitiveNameMatches []string, mapId string) {
+func processDebugMapField(grp *jen.Group, field *ast.Field, fieldName string, c Config, sensitiveNameMatches []string, mapId string, pkgFiles []*ast.File) {
 	// Parse the debugmap tag
 	tagValue, err := parseStructTag(field, DebugMapFieldTag)
 	if err != nil {
@@ -473,11 +477,11 @@ func processDebugMapField(grp *jen.Group, field *ast.Field, fieldName string, c 
 	switch tagValue {
 	case "visible":
 		validateNotSensitive(fieldName, c.TargetTypeName, sensitiveNameMatches)
-		generateDebugCodeByCategory(grp, field.Type, c.ReceiverId, fieldName, mapId, false)
+		generateDebugCodeByCategory(grp, field.Type, c.ReceiverId, fieldName, mapId, false, pkgFiles)
 
 	case "visible-format":
 		validateNotSensitive(fieldName, c.TargetTypeName, sensitiveNameMatches)
-		generateDebugCodeByCategory(grp, field.Type, c.ReceiverId, fieldName, mapId, true)
+		generateDebugCodeByCategory(grp, field.Type, c.ReceiverId, fieldName, mapId, true, pkgFiles)
 
 	case "hidden":
 		// Skip this field entirely
@@ -504,13 +508,13 @@ func validateNotSensitive(fieldName, typeName string, sensitiveNameMatches []str
 }
 
 // generateDebugCodeByCategory generates debug code based on type category
-func generateDebugCodeByCategory(grp *jen.Group, fieldType ast.Expr, receiverId, fieldName, mapId string, useFormat bool) {
+func generateDebugCodeByCategory(grp *jen.Group, fieldType ast.Expr, receiverId, fieldName, mapId string, useFormat bool, pkgFiles []*ast.File) {
 	category := getTypeCategory(fieldType)
 	switch category {
 	case typeCategoryPrimitive:
 		generateDebugCodeForPrimitive(grp, receiverId, fieldName, fieldType, mapId)
 	case typeCategoryPointer:
-		generateDebugCodeForPointer(grp, receiverId, fieldName, fieldType, mapId)
+		generateDebugCodeForPointer(grp, receiverId, fieldName, fieldType, mapId, pkgFiles)
 	case typeCategorySlice:
 		if useFormat {
 			generateDebugCodeForSliceFormat(grp, receiverId, fieldName, fieldType, mapId)
@@ -524,8 +528,13 @@ func generateDebugCodeByCategory(grp *jen.Group, fieldType ast.Expr, receiverId,
 			generateDebugCodeForMapSize(grp, receiverId, fieldName, mapId)
 		}
 	default:
-		// Complex types: direct assignment
-		grp.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Id(receiverId).Dot(fieldName)
+		// Complex types: delegate to DebugMap() if the type has debugmap-tagged fields,
+		// otherwise fall back to direct assignment (e.g. time.Time, uuid.UUID).
+		if ident, ok := fieldType.(*ast.Ident); ok && hasDebugMapTags(ident.Name, pkgFiles) {
+			grp.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Id(receiverId).Dot(fieldName).Dot("DebugMap").Call()
+		} else {
+			grp.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Id(receiverId).Dot(fieldName)
+		}
 	}
 }
 
@@ -758,6 +767,48 @@ func getTypeCategory(expr ast.Expr) string {
 	}
 }
 
+// hasDebugMapTags reports whether the named struct type in the provided AST files
+// has any field annotated with a debugmap struct tag. This is the indicator that
+// optgen will generate (or has generated) a DebugMap() method for that type.
+// Checking source (not generated output) makes this order-independent.
+func hasDebugMapTags(typeName string, files []*ast.File) bool {
+	for _, f := range files {
+		for _, decl := range f.Decls {
+			genDecl, ok := decl.(*ast.GenDecl)
+			if !ok {
+				continue
+			}
+			for _, spec := range genDecl.Specs {
+				ts, ok := spec.(*ast.TypeSpec)
+				if !ok {
+					continue
+				}
+				if ts.Name.Name != typeName {
+					continue
+				}
+				st, ok := ts.Type.(*ast.StructType)
+				if !ok {
+					continue
+				}
+				for _, field := range st.Fields.List {
+					if field.Tag == nil {
+						continue
+					}
+					tagStr := strings.Trim(field.Tag.Value, "`")
+					tags, err := structtag.Parse(tagStr)
+					if err != nil {
+						continue
+					}
+					if _, err := tags.Get(DebugMapFieldTag); err == nil {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
 // isStringType checks if a type is a string
 func isStringType(expr ast.Expr) bool {
 	if ident, ok := expr.(*ast.Ident); ok {
@@ -792,10 +843,22 @@ func generateDebugCodeForPrimitive(grp *jen.Group, receiverId, fieldName string,
 }
 
 // generateDebugCodeForPointer handles pointer types
-func generateDebugCodeForPointer(grp *jen.Group, receiverId, fieldName string, fieldType ast.Expr, mapId string) {
+func generateDebugCodeForPointer(grp *jen.Group, receiverId, fieldName string, fieldType ast.Expr, mapId string, pkgFiles []*ast.File) {
 	fieldAccess := jen.Id(receiverId).Dot(fieldName)
 
-	// Check for nil, then dereference
+	// If the pointed-to type has debugmap-tagged fields, delegate to .DebugMap().
+	if starExpr, ok := fieldType.(*ast.StarExpr); ok {
+		if ident, ok := starExpr.X.(*ast.Ident); ok && hasDebugMapTags(ident.Name, pkgFiles) {
+			grp.If(jen.Add(fieldAccess).Op("==").Nil()).Block(
+				jen.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Lit("nil"),
+			).Else().Block(
+				jen.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Add(fieldAccess).Dot("DebugMap").Call(),
+			)
+			return
+		}
+	}
+
+	// Default: nil check + dereference.
 	grp.If(jen.Add(fieldAccess).Op("==").Nil()).Block(
 		jen.Id(mapId).Index(jen.Lit(fieldName)).Op("=").Lit("nil"),
 	).Else().Block(
