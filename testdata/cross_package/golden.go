@@ -44,14 +44,14 @@ func (c *CrossPackage) DebugMap() map[string]any {
 	} else {
 		debugMap["Name"] = c.Name
 	}
-	if dm, ok := any(c.Timestamp).(interface {
+	if dm, ok := any(&c.Timestamp).(interface {
 		DebugMap() map[string]any
 	}); ok {
 		debugMap["Timestamp"] = dm.DebugMap()
 	} else {
 		debugMap["Timestamp"] = c.Timestamp
 	}
-	if dm, ok := any(c.Duration).(interface {
+	if dm, ok := any(&c.Duration).(interface {
 		DebugMap() map[string]any
 	}); ok {
 		debugMap["Duration"] = dm.DebugMap()
