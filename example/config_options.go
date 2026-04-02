@@ -11,8 +11,8 @@ type ConfigOption func(c *Config)
 // NewConfigWithOptions creates a new Config with the passed in options set
 func NewConfigWithOptions(opts ...ConfigOption) *Config {
 	c := &Config{}
-	for _, o := range opts {
-		o(c)
+	for _, opt := range opts {
+		opt(c)
 	}
 	return c
 }
@@ -21,8 +21,8 @@ func NewConfigWithOptions(opts ...ConfigOption) *Config {
 func NewConfigWithOptionsAndDefaults(opts ...ConfigOption) *Config {
 	c := &Config{}
 	defaults.MustSet(c)
-	for _, o := range opts {
-		o(c)
+	for _, opt := range opts {
+		opt(c)
 	}
 	return c
 }
@@ -104,16 +104,16 @@ func (c *Config) FlatDebugMap() map[string]any {
 
 // ConfigWithOptions configures an existing Config with the passed in options set
 func ConfigWithOptions(c *Config, opts ...ConfigOption) *Config {
-	for _, o := range opts {
-		o(c)
+	for _, opt := range opts {
+		opt(c)
 	}
 	return c
 }
 
 // WithOptions configures the receiver Config with the passed in options set
 func (c *Config) WithOptions(opts ...ConfigOption) *Config {
-	for _, o := range opts {
-		o(c)
+	for _, opt := range opts {
+		opt(c)
 	}
 	return c
 }
@@ -186,8 +186,8 @@ type ServerOption func(s *Server)
 // NewServerWithOptions creates a new Server with the passed in options set
 func NewServerWithOptions(opts ...ServerOption) *Server {
 	s := &Server{}
-	for _, o := range opts {
-		o(s)
+	for _, opt := range opts {
+		opt(s)
 	}
 	return s
 }
@@ -196,8 +196,8 @@ func NewServerWithOptions(opts ...ServerOption) *Server {
 func NewServerWithOptionsAndDefaults(opts ...ServerOption) *Server {
 	s := &Server{}
 	defaults.MustSet(s)
-	for _, o := range opts {
-		o(s)
+	for _, opt := range opts {
+		opt(s)
 	}
 	return s
 }
@@ -261,16 +261,16 @@ func (s *Server) FlatDebugMap() map[string]any {
 
 // ServerWithOptions configures an existing Server with the passed in options set
 func ServerWithOptions(s *Server, opts ...ServerOption) *Server {
-	for _, o := range opts {
-		o(s)
+	for _, opt := range opts {
+		opt(s)
 	}
 	return s
 }
 
 // WithOptions configures the receiver Server with the passed in options set
 func (s *Server) WithOptions(opts ...ServerOption) *Server {
-	for _, o := range opts {
-		o(s)
+	for _, opt := range opts {
+		opt(s)
 	}
 	return s
 }

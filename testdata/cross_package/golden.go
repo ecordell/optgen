@@ -11,8 +11,8 @@ type CrossPackageOption func(c *CrossPackage)
 // NewCrossPackageWithOptions creates a new CrossPackage with the passed in options set
 func NewCrossPackageWithOptions(opts ...CrossPackageOption) *CrossPackage {
 	c := &CrossPackage{}
-	for _, o := range opts {
-		o(c)
+	for _, opt := range opts {
+		opt(c)
 	}
 	return c
 }
@@ -21,8 +21,8 @@ func NewCrossPackageWithOptions(opts ...CrossPackageOption) *CrossPackage {
 func NewCrossPackageWithOptionsAndDefaults(opts ...CrossPackageOption) *CrossPackage {
 	c := &CrossPackage{}
 	defaults.MustSet(c)
-	for _, o := range opts {
-		o(c)
+	for _, opt := range opts {
+		opt(c)
 	}
 	return c
 }
@@ -84,16 +84,16 @@ func (c *CrossPackage) FlatDebugMap() map[string]any {
 
 // CrossPackageWithOptions configures an existing CrossPackage with the passed in options set
 func CrossPackageWithOptions(c *CrossPackage, opts ...CrossPackageOption) *CrossPackage {
-	for _, o := range opts {
-		o(c)
+	for _, opt := range opts {
+		opt(c)
 	}
 	return c
 }
 
 // WithOptions configures the receiver CrossPackage with the passed in options set
 func (c *CrossPackage) WithOptions(opts ...CrossPackageOption) *CrossPackage {
-	for _, o := range opts {
-		o(c)
+	for _, opt := range opts {
+		opt(c)
 	}
 	return c
 }

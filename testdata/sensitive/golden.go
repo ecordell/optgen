@@ -8,8 +8,8 @@ type CredentialsOption func(c *Credentials)
 // NewCredentialsWithOptions creates a new Credentials with the passed in options set
 func NewCredentialsWithOptions(opts ...CredentialsOption) *Credentials {
 	c := &Credentials{}
-	for _, o := range opts {
-		o(c)
+	for _, opt := range opts {
+		opt(c)
 	}
 	return c
 }
@@ -18,8 +18,8 @@ func NewCredentialsWithOptions(opts ...CredentialsOption) *Credentials {
 func NewCredentialsWithOptionsAndDefaults(opts ...CredentialsOption) *Credentials {
 	c := &Credentials{}
 	defaults.MustSet(c)
-	for _, o := range opts {
-		o(c)
+	for _, opt := range opts {
+		opt(c)
 	}
 	return c
 }
@@ -83,16 +83,16 @@ func (c *Credentials) FlatDebugMap() map[string]any {
 
 // CredentialsWithOptions configures an existing Credentials with the passed in options set
 func CredentialsWithOptions(c *Credentials, opts ...CredentialsOption) *Credentials {
-	for _, o := range opts {
-		o(c)
+	for _, opt := range opts {
+		opt(c)
 	}
 	return c
 }
 
 // WithOptions configures the receiver Credentials with the passed in options set
 func (c *Credentials) WithOptions(opts ...CredentialsOption) *Credentials {
-	for _, o := range opts {
-		o(c)
+	for _, opt := range opts {
+		opt(c)
 	}
 	return c
 }

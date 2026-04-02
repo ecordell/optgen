@@ -11,8 +11,8 @@ type DatabaseConfigOption func(d *DatabaseConfig)
 // NewDatabaseConfigWithOptions creates a new DatabaseConfig with the passed in options set
 func NewDatabaseConfigWithOptions(opts ...DatabaseConfigOption) *DatabaseConfig {
 	d := &DatabaseConfig{}
-	for _, o := range opts {
-		o(d)
+	for _, opt := range opts {
+		opt(d)
 	}
 	return d
 }
@@ -21,8 +21,8 @@ func NewDatabaseConfigWithOptions(opts ...DatabaseConfigOption) *DatabaseConfig 
 func NewDatabaseConfigWithOptionsAndDefaults(opts ...DatabaseConfigOption) *DatabaseConfig {
 	d := &DatabaseConfig{}
 	defaults.MustSet(d)
-	for _, o := range opts {
-		o(d)
+	for _, opt := range opts {
+		opt(d)
 	}
 	return d
 }
@@ -74,16 +74,16 @@ func (d *DatabaseConfig) FlatDebugMap() map[string]any {
 
 // DatabaseConfigWithOptions configures an existing DatabaseConfig with the passed in options set
 func DatabaseConfigWithOptions(d *DatabaseConfig, opts ...DatabaseConfigOption) *DatabaseConfig {
-	for _, o := range opts {
-		o(d)
+	for _, opt := range opts {
+		opt(d)
 	}
 	return d
 }
 
 // WithOptions configures the receiver DatabaseConfig with the passed in options set
 func (d *DatabaseConfig) WithOptions(opts ...DatabaseConfigOption) *DatabaseConfig {
-	for _, o := range opts {
-		o(d)
+	for _, opt := range opts {
+		opt(d)
 	}
 	return d
 }
