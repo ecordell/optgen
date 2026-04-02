@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -34,7 +35,7 @@ func TestGoldenFiles(t *testing.T) {
 		{"cross package types", "testdata/cross_package", "CrossPackage"},
 		{"database/sql types", "testdata/database_sql", "DatabaseConfig"},
 		{"generic types", "testdata/generics", "GenericConfig"},
-		{"nested struct delegation", "testdata/nested", "OuterConfig"},
+		{"nested struct delegation", "testdata/nested", "NestedConfig OuterConfig"},
 	}
 
 	for _, tt := range tests {
@@ -48,8 +49,9 @@ func TestGoldenFiles(t *testing.T) {
 				_ = os.Remove(outputFile)
 			}()
 
-			// Run optgen
-			cmd := exec.Command("./optgen_testbin", "-output="+outputFile, tt.inputDir, tt.structName)
+			// Run optgen (structName may be space-separated for multiple structs)
+			args := append([]string{"-output=" + outputFile, tt.inputDir}, strings.Fields(tt.structName)...)
+			cmd := exec.Command("./optgen_testbin", args...)
 			output, err := cmd.CombinedOutput()
 			if err != nil {
 				t.Fatalf("generation failed: %v\nOutput: %s", err, output)

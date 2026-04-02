@@ -8,8 +8,8 @@ type BasicConfigOption func(b *BasicConfig)
 // NewBasicConfigWithOptions creates a new BasicConfig with the passed in options set
 func NewBasicConfigWithOptions(opts ...BasicConfigOption) *BasicConfig {
 	b := &BasicConfig{}
-	for _, o := range opts {
-		o(b)
+	for _, opt := range opts {
+		opt(b)
 	}
 	return b
 }
@@ -18,8 +18,8 @@ func NewBasicConfigWithOptions(opts ...BasicConfigOption) *BasicConfig {
 func NewBasicConfigWithOptionsAndDefaults(opts ...BasicConfigOption) *BasicConfig {
 	b := &BasicConfig{}
 	defaults.MustSet(b)
-	for _, o := range opts {
-		o(b)
+	for _, opt := range opts {
+		opt(b)
 	}
 	return b
 }
@@ -79,16 +79,16 @@ func (b *BasicConfig) FlatDebugMap() map[string]any {
 
 // BasicConfigWithOptions configures an existing BasicConfig with the passed in options set
 func BasicConfigWithOptions(b *BasicConfig, opts ...BasicConfigOption) *BasicConfig {
-	for _, o := range opts {
-		o(b)
+	for _, opt := range opts {
+		opt(b)
 	}
 	return b
 }
 
 // WithOptions configures the receiver BasicConfig with the passed in options set
 func (b *BasicConfig) WithOptions(opts ...BasicConfigOption) *BasicConfig {
-	for _, o := range opts {
-		o(b)
+	for _, opt := range opts {
+		opt(b)
 	}
 	return b
 }

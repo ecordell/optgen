@@ -3,13 +3,109 @@ package testdata
 
 import defaults "github.com/creasty/defaults"
 
+type NestedConfigOption func(n *NestedConfig)
+
+// NewNestedConfigWithOptions creates a new NestedConfig with the passed in options set
+func NewNestedConfigWithOptions(opts ...NestedConfigOption) *NestedConfig {
+	n := &NestedConfig{}
+	for _, opt := range opts {
+		opt(n)
+	}
+	return n
+}
+
+// NewNestedConfigWithOptionsAndDefaults creates a new NestedConfig with the passed in options set starting from the defaults
+func NewNestedConfigWithOptionsAndDefaults(opts ...NestedConfigOption) *NestedConfig {
+	n := &NestedConfig{}
+	defaults.MustSet(n)
+	for _, opt := range opts {
+		opt(n)
+	}
+	return n
+}
+
+// ToOption returns a new NestedConfigOption that sets the values from the passed in NestedConfig
+func (n *NestedConfig) ToOption() NestedConfigOption {
+	return func(to *NestedConfig) {
+		to.URI = n.URI
+		to.Engine = n.Engine
+	}
+}
+
+// DebugMap returns a map form of NestedConfig for debugging
+func (n *NestedConfig) DebugMap() map[string]any {
+	debugMap := map[string]any{}
+	if n.URI == "" {
+		debugMap["URI"] = "(empty)"
+	} else {
+		debugMap["URI"] = "(sensitive)"
+	}
+	if n.Engine == "" {
+		debugMap["Engine"] = "(empty)"
+	} else {
+		debugMap["Engine"] = n.Engine
+	}
+	return debugMap
+}
+
+// FlatDebugMap returns a flattened map form of NestedConfig for debugging
+// Nested maps are flattened using dot notation (e.g., "parent.child.field")
+func (n *NestedConfig) FlatDebugMap() map[string]any {
+	var flatten func(m map[string]any) map[string]any
+	flatten = func(m map[string]any) map[string]any {
+		result := make(map[string]any, len(m))
+		for key, value := range m {
+			childMap, ok := value.(map[string]any)
+			if ok {
+				for childKey, childValue := range flatten(childMap) {
+					result[key+"."+childKey] = childValue
+				}
+				continue
+			}
+			result[key] = value
+		}
+		return result
+	}
+	return flatten(n.DebugMap())
+}
+
+// NestedConfigWithOptions configures an existing NestedConfig with the passed in options set
+func NestedConfigWithOptions(n *NestedConfig, opts ...NestedConfigOption) *NestedConfig {
+	for _, opt := range opts {
+		opt(n)
+	}
+	return n
+}
+
+// WithOptions configures the receiver NestedConfig with the passed in options set
+func (n *NestedConfig) WithOptions(opts ...NestedConfigOption) *NestedConfig {
+	for _, opt := range opts {
+		opt(n)
+	}
+	return n
+}
+
+// WithURI returns an option that can set URI on a NestedConfig
+func WithURI(uRI string) NestedConfigOption {
+	return func(n *NestedConfig) {
+		n.URI = uRI
+	}
+}
+
+// WithEngine returns an option that can set Engine on a NestedConfig
+func WithEngine(engine string) NestedConfigOption {
+	return func(n *NestedConfig) {
+		n.Engine = engine
+	}
+}
+
 type OuterConfigOption func(o *OuterConfig)
 
 // NewOuterConfigWithOptions creates a new OuterConfig with the passed in options set
 func NewOuterConfigWithOptions(opts ...OuterConfigOption) *OuterConfig {
 	o := &OuterConfig{}
-	for _, o := range opts {
-		o(o)
+	for _, opt := range opts {
+		opt(o)
 	}
 	return o
 }
@@ -18,8 +114,8 @@ func NewOuterConfigWithOptions(opts ...OuterConfigOption) *OuterConfig {
 func NewOuterConfigWithOptionsAndDefaults(opts ...OuterConfigOption) *OuterConfig {
 	o := &OuterConfig{}
 	defaults.MustSet(o)
-	for _, o := range opts {
-		o(o)
+	for _, opt := range opts {
+		opt(o)
 	}
 	return o
 }
@@ -83,16 +179,16 @@ func (o *OuterConfig) FlatDebugMap() map[string]any {
 
 // OuterConfigWithOptions configures an existing OuterConfig with the passed in options set
 func OuterConfigWithOptions(o *OuterConfig, opts ...OuterConfigOption) *OuterConfig {
-	for _, o := range opts {
-		o(o)
+	for _, opt := range opts {
+		opt(o)
 	}
 	return o
 }
 
 // WithOptions configures the receiver OuterConfig with the passed in options set
 func (o *OuterConfig) WithOptions(opts ...OuterConfigOption) *OuterConfig {
-	for _, o := range opts {
-		o(o)
+	for _, opt := range opts {
+		opt(o)
 	}
 	return o
 }

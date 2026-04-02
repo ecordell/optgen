@@ -912,8 +912,8 @@ func generateDebugCodeForSensitive(grp *jen.Group, receiverId, fieldName string,
 
 func applyOptions(receiverId string) func(grp *jen.Group) {
 	return func(grp *jen.Group) {
-		grp.For(jen.Id("_").Op(",").Id("o").Op(":=").Op("range").Id("opts")).Block(
-			jen.Id("o").Params(jen.Id(receiverId)),
+		grp.For(jen.Id("_").Op(",").Id("opt").Op(":=").Op("range").Id("opts")).Block(
+			jen.Id("opt").Params(jen.Id(receiverId)),
 		)
 		grp.Return(jen.Id(receiverId))
 	}

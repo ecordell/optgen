@@ -8,8 +8,8 @@ type HiddenFieldsOption func(h *HiddenFields)
 // NewHiddenFieldsWithOptions creates a new HiddenFields with the passed in options set
 func NewHiddenFieldsWithOptions(opts ...HiddenFieldsOption) *HiddenFields {
 	h := &HiddenFields{}
-	for _, o := range opts {
-		o(h)
+	for _, opt := range opts {
+		opt(h)
 	}
 	return h
 }
@@ -18,8 +18,8 @@ func NewHiddenFieldsWithOptions(opts ...HiddenFieldsOption) *HiddenFields {
 func NewHiddenFieldsWithOptionsAndDefaults(opts ...HiddenFieldsOption) *HiddenFields {
 	h := &HiddenFields{}
 	defaults.MustSet(h)
-	for _, o := range opts {
-		o(h)
+	for _, opt := range opts {
+		opt(h)
 	}
 	return h
 }
@@ -72,16 +72,16 @@ func (h *HiddenFields) FlatDebugMap() map[string]any {
 
 // HiddenFieldsWithOptions configures an existing HiddenFields with the passed in options set
 func HiddenFieldsWithOptions(h *HiddenFields, opts ...HiddenFieldsOption) *HiddenFields {
-	for _, o := range opts {
-		o(h)
+	for _, opt := range opts {
+		opt(h)
 	}
 	return h
 }
 
 // WithOptions configures the receiver HiddenFields with the passed in options set
 func (h *HiddenFields) WithOptions(opts ...HiddenFieldsOption) *HiddenFields {
-	for _, o := range opts {
-		o(h)
+	for _, opt := range opts {
+		opt(h)
 	}
 	return h
 }

@@ -11,8 +11,8 @@ type FormatTestOption func(f *FormatTest)
 // NewFormatTestWithOptions creates a new FormatTest with the passed in options set
 func NewFormatTestWithOptions(opts ...FormatTestOption) *FormatTest {
 	f := &FormatTest{}
-	for _, o := range opts {
-		o(f)
+	for _, opt := range opts {
+		opt(f)
 	}
 	return f
 }
@@ -21,8 +21,8 @@ func NewFormatTestWithOptions(opts ...FormatTestOption) *FormatTest {
 func NewFormatTestWithOptionsAndDefaults(opts ...FormatTestOption) *FormatTest {
 	f := &FormatTest{}
 	defaults.MustSet(f)
-	for _, o := range opts {
-		o(f)
+	for _, opt := range opts {
+		opt(f)
 	}
 	return f
 }
@@ -76,16 +76,16 @@ func (f *FormatTest) FlatDebugMap() map[string]any {
 
 // FormatTestWithOptions configures an existing FormatTest with the passed in options set
 func FormatTestWithOptions(f *FormatTest, opts ...FormatTestOption) *FormatTest {
-	for _, o := range opts {
-		o(f)
+	for _, opt := range opts {
+		opt(f)
 	}
 	return f
 }
 
 // WithOptions configures the receiver FormatTest with the passed in options set
 func (f *FormatTest) WithOptions(opts ...FormatTestOption) *FormatTest {
-	for _, o := range opts {
-		o(f)
+	for _, opt := range opts {
+		opt(f)
 	}
 	return f
 }

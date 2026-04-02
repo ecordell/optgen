@@ -11,8 +11,8 @@ type SlicesAndMapsOption func(s *SlicesAndMaps)
 // NewSlicesAndMapsWithOptions creates a new SlicesAndMaps with the passed in options set
 func NewSlicesAndMapsWithOptions(opts ...SlicesAndMapsOption) *SlicesAndMaps {
 	s := &SlicesAndMaps{}
-	for _, o := range opts {
-		o(s)
+	for _, opt := range opts {
+		opt(s)
 	}
 	return s
 }
@@ -21,8 +21,8 @@ func NewSlicesAndMapsWithOptions(opts ...SlicesAndMapsOption) *SlicesAndMaps {
 func NewSlicesAndMapsWithOptionsAndDefaults(opts ...SlicesAndMapsOption) *SlicesAndMaps {
 	s := &SlicesAndMaps{}
 	defaults.MustSet(s)
-	for _, o := range opts {
-		o(s)
+	for _, opt := range opts {
+		opt(s)
 	}
 	return s
 }
@@ -92,16 +92,16 @@ func (s *SlicesAndMaps) FlatDebugMap() map[string]any {
 
 // SlicesAndMapsWithOptions configures an existing SlicesAndMaps with the passed in options set
 func SlicesAndMapsWithOptions(s *SlicesAndMaps, opts ...SlicesAndMapsOption) *SlicesAndMaps {
-	for _, o := range opts {
-		o(s)
+	for _, opt := range opts {
+		opt(s)
 	}
 	return s
 }
 
 // WithOptions configures the receiver SlicesAndMaps with the passed in options set
 func (s *SlicesAndMaps) WithOptions(opts ...SlicesAndMapsOption) *SlicesAndMaps {
-	for _, o := range opts {
-		o(s)
+	for _, opt := range opts {
+		opt(s)
 	}
 	return s
 }

@@ -11,8 +11,8 @@ type GenericConfigOption func(g *GenericConfig)
 // NewGenericConfigWithOptions creates a new GenericConfig with the passed in options set
 func NewGenericConfigWithOptions(opts ...GenericConfigOption) *GenericConfig {
 	g := &GenericConfig{}
-	for _, o := range opts {
-		o(g)
+	for _, opt := range opts {
+		opt(g)
 	}
 	return g
 }
@@ -21,8 +21,8 @@ func NewGenericConfigWithOptions(opts ...GenericConfigOption) *GenericConfig {
 func NewGenericConfigWithOptionsAndDefaults(opts ...GenericConfigOption) *GenericConfig {
 	g := &GenericConfig{}
 	defaults.MustSet(g)
-	for _, o := range opts {
-		o(g)
+	for _, opt := range opts {
+		opt(g)
 	}
 	return g
 }
@@ -114,16 +114,16 @@ func (g *GenericConfig) FlatDebugMap() map[string]any {
 
 // GenericConfigWithOptions configures an existing GenericConfig with the passed in options set
 func GenericConfigWithOptions(g *GenericConfig, opts ...GenericConfigOption) *GenericConfig {
-	for _, o := range opts {
-		o(g)
+	for _, opt := range opts {
+		opt(g)
 	}
 	return g
 }
 
 // WithOptions configures the receiver GenericConfig with the passed in options set
 func (g *GenericConfig) WithOptions(opts ...GenericConfigOption) *GenericConfig {
-	for _, o := range opts {
-		o(g)
+	for _, opt := range opts {
+		opt(g)
 	}
 	return g
 }
